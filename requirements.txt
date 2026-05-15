@@ -1,0 +1,3 @@
+# This repository is a Node.js/TypeScript project, not a Python project.
+# Python package installation is not required.
+# Use `npm install` to install dependencies instead.

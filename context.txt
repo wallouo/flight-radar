@@ -1,0 +1,32 @@
+--- START OF FILE context.txt ---
+
+# Context & Goal
+I want to build a modern, lightweight, automated "Flight Price Radar" system to track flight tickets from the UK to Europe (normal tickets) and to global destinations (cheap business class deals). 
+
+CRITICAL RULE: DO NOT build a web scraper (no BeautifulSoup) and DO NOT parse emails. We are using an API-First, Serverless, and AI-assisted architecture to ensure extreme stability and zero maintenance.
+
+# Core Architecture & Tech Stack (Mandatory)
+We are adopting a modern cloud-native approach. Use TypeScript (Node.js/Bun) or Python.
+1. Orchestration/Compute: Trigger.dev, Inngest, or Modal (for robust cron jobs, auto-retries, and rate-limit handling). DO NOT use standard GitHub Actions for runtime execution.
+2. Database: Turso (Edge SQLite) or Supabase. We need an edge database to persist state across serverless invocations. DO NOT use local `.sqlite` files.
+3. Data Source A (Normal Flights): SerpApi (Google Flights API) or Duffel API to fetch structured JSON pricing data.
+4. Data Source B (Business Deals): Fetch RSS feeds (e.g., Secret Flying standard XML). 
+5. Data Parser (AI-Assisted): Pass the unstructured RSS deal text/titles to a fast LLM API (e.g., Groq with Llama-3 or OpenAI gpt-4o-mini) to force-output structured JSON (e.g., extracting origin, destination, price, and checking if it's a business class error fare). DO NOT use Regex for deal parsing.
+6. Notification: Discord Webhooks.
+
+# Core Requirements
+1. Logic & Filtering (Processing):
+   - Normal tickets: Query the Edge DB to keep track of the top 3 cheapest prices historically per destination. Only alert if a new price breaks into the top 3.
+   - Business class deals: Rely on the LLM JSON output to verify it's a long-haul business class ticket, and check if the price drops below an extreme threshold (e.g., < £1000). 
+   - Deduplication: Ensure no duplicate alerts are sent for the same deal link or flight parameters.
+2. Output:
+   - Send beautifully formatted rich embed alerts to Discord when criteria are met.
+
+# Agent Task
+Please act as the lead architect and backend developer. We have already finalized the architecture. Your task is to:
+1. Define the Edge Database schema (tables for tracking tracked_destinations, fare_observations, and business_deals for deduplication).
+2. Propose the precise system module layout and data interfaces (e.g., Zod or Pydantic schemas for the LLM output and API responses).
+3. Outline a step-by-step implementation plan (from DB initialization, API clients, LLM integration, logic engine, to orchestrator deployment).
+4. Based on the `routing_rules`, output the recommended Execution Command (e.g., omx-team-hard 3) and assign specific roles to the workers to begin coding.
+
+--- END OF FILE context.txt ---

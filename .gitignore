@@ -1,0 +1,83 @@
+.omx/
+.codex/*
+.codex
+.claw
+!.codex/agents/
+!.codex/agents/**
+!.codex/skills/
+!.codex/skills/**
+.codex/skills/.system/**
+!.codex/prompts/
+!.codex/prompts/**
+.clawd-todos.json
+AGENTS.md
+Dockerfile
+# dependencies
+node_modules/
+
+# build output
+dist/
+coverage/
+*.tsbuildinfo
+
+# environment files
+.env
+.env.*
+!.env.example
+
+# logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+*.log
+
+# OS / editor files
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# local database / cache
+*.db
+*.sqlite
+*.sqlite3
+.tmp/
+tmp/
+
+# secrets and credentials
+*.pem
+*.key
+*.p12
+*.pfx
+credentials.json
+secrets.json
+
+# temporary files
+prompts.txt
+*.bak
+*.swp
+*~
+
+# local documentation and notes
+CHANGES.md
+PUBLIC_REPO_CHECKLIST.md
+TODO.md
+NOTES.md
+notes/
+docs/local/
+
+# test data and outputs
+test-output/
+*.test.log
+screenshots/
+debug/
+GITHUB_ACTIONS_SETUP.md
+IMPLEMENTATION_REPORT.md
+MIGRATION_SUMMARY.md
+prompts.txt
+GITHUB_ACTIONS_403_FIX.md
+RSS_CLOUDFLARE_FIX.md
+CURL_CFFI_MIGRATION.md
+SCRAPERAPI_MIGRATION.md
+docs/EXCHANGE_RATES.md

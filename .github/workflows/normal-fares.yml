@@ -1,0 +1,41 @@
+name: Normal Fares Scanner
+
+on:
+  schedule:
+    # 每 12 小時執行一次 (UTC 00:00 和 12:00)
+    - cron: '0 0,12 * * *'
+  workflow_dispatch: # 允許手動觸發
+
+jobs:
+  scan-normal-fares:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build project
+        run: npm run build
+
+      - name: Run normal fares scanner
+        env:
+          NODE_ENV: production
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          DATABASE_AUTH_TOKEN: ${{ secrets.DATABASE_AUTH_TOKEN }}
+          SERPAPI_API_KEY: ${{ secrets.SERPAPI_API_KEY }}
+          SCRAPERAPI_KEY: ${{ secrets.SCRAPERAPI_KEY }}
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          SCHEDULER_LEASE_DURATION_MS: ${{ secrets.SCHEDULER_LEASE_DURATION_MS }}
+          # Optional: RSS_FEED_URLS is not used by normal-fares but included for consistency
+          RSS_FEED_URLS: ${{ secrets.RSS_FEED_URLS }}
+        run: npm run job:normal-fares
