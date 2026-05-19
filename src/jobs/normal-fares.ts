@@ -7,15 +7,16 @@ import type { NormalizedFareObservation, SerpApiFlightResult, TrackedDestination
 import { createStableId } from "../utils/id.js";
 import { decimalToMinorUnits } from "../utils/currency.js";
 
-const airportSearchExpansions: Readonly<Record<string, readonly string[]>> = {
-  LON: ["LHR", "LGW", "LCY", "LTN", "STN", "SEN"]
-};
+// Empty: Google Flights natively resolves LON (and other metro codes) to all
+// constituent airports, so client-side expansion is unnecessary and wastes API quota.
+const airportSearchExpansions: Readonly<Record<string, readonly string[]>> = {};
 
 /**
- * Max candidate dates per origin that proceed from Phase 1 to Phase 2.
- * Keeps Phase 2 API usage bounded regardless of date range width.
+ * Max candidate dates per destination that proceed from Phase 1 to Phase 2.
+ * Lowered to 3 to stay within free-tier SerpAPI limits (300 calls/month total
+ * across 3 keys, 7 LON destinations, scanning every 48 hours).
  */
-const MAX_PHASE2_DATES_PER_DESTINATION = 5;
+const MAX_PHASE2_DATES_PER_DESTINATION = 3;
 
 export interface NormalFaresJobDeps {
   repository: FlightPriceRepository;
