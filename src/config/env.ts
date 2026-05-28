@@ -29,7 +29,11 @@ export const environmentSchema = z.object({
   RUN_BUSINESS_DEALS_ON_STARTUP: z.coerce.boolean().default(true)
 })
   .refine(
-    (env) => Boolean(env.SERPAPI_API_KEY ?? env.SERPAPI_API_KEYS),
+    (env) => {
+      const singleKey = env.SERPAPI_API_KEY?.trim();
+      const multipleKeys = env.SERPAPI_API_KEYS?.trim();
+      return Boolean(multipleKeys || singleKey);
+    },
     { message: "Either SERPAPI_API_KEY or SERPAPI_API_KEYS must be set" }
   )
   .transform((env) => ({
