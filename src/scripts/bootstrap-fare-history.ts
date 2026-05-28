@@ -1,5 +1,6 @@
 import "dotenv/config";
 import { createSerpApiClient } from "../clients/serpapi.js";
+import { SerpApiKeyPool, parseSerpApiKeys } from "../clients/serpapi-key-pool.js";
 import { loadEnvironment } from "../config/env.js";
 import { createTursoClient, createTursoRepository } from "../db/repositories.js";
 import { buildSerpApiObservation } from "../logic/serpapi-normalization.js";
@@ -83,8 +84,11 @@ async function main(): Promise<void> {
     authToken: env.DATABASE_AUTH_TOKEN
   });
   const repository = createTursoRepository(client);
+  const serpApiKeyPool = buildSerpApiKeyPool(env);
+
   const serpApiClient = createSerpApiClient({
-    apiKey: env.SERPAPI_API_KEY
+    apiKey: serpApiKeyPool.getActiveKey(),
+    keyPool: serpApiKeyPool
   });
 
   const destinations = await repository.listActiveTrackedDestinations();
@@ -177,6 +181,12 @@ async function main(): Promise<void> {
   console.log(`[bootstrap-fare-history] dry-run candidates: ${dryRunCandidateCount}`);
 
   await client.close();
+}
+
+function buildSerpApiKeyPool(env: ReturnType<typeof loadEnvironment>): SerpApiKeyPool {
+  const raw = env.SERPAPI_API_KEYS ?? env.SERPAPI_API_KEY ?? "";
+  const keys = parseSerpApiKeys(raw);
+  return new SerpApiKeyPool({ keys });
 }
 
 function selectDestinationsToProcess(

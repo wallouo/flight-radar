@@ -32,7 +32,7 @@ jobs:
           NODE_ENV: production
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
           DATABASE_AUTH_TOKEN: ${{ secrets.DATABASE_AUTH_TOKEN }}
-          SERPAPI_API_KEY: ${{ secrets.SERPAPI_API_KEY }}
+          SERPAPI_API_KEYS: ${{ secrets.SERPAPI_API_KEYS }}
           SCRAPERAPI_KEY: ${{ secrets.SCRAPERAPI_KEY }}
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
           SCHEDULER_LEASE_DURATION_MS: ${{ secrets.SCHEDULER_LEASE_DURATION_MS }}

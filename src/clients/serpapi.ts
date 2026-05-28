@@ -1,12 +1,20 @@
 import { serpApiFlightResultSchema } from "../schemas/domain.js";
 import type { SerpApiFlightResult, TrackedDestination } from "../types/domain.js";
+import type { SerpApiKeyPool } from "./serpapi-key-pool.js";
 
 export interface SerpApiClient {
   searchFlights(destination: TrackedDestination): Promise<SerpApiFlightResult[]>;
+  searchCalendar(destination: TrackedDestination, monthYYYYMM: string): Promise<SerpApiCalendarDay[]>;
+}
+
+export interface SerpApiCalendarDay {
+  date: string;   // YYYY-MM-DD
+  price: number;  // decimal amount in destination currency
 }
 
 export interface SerpApiClientConfig {
   apiKey: string;
+  keyPool?: SerpApiKeyPool;
   baseUrl?: string;
   fetch?: typeof fetch;
 }
@@ -46,12 +54,7 @@ export function createSerpApiClient(config: SerpApiClientConfig): SerpApiClient 
   return {
     async searchFlights(destination: TrackedDestination): Promise<SerpApiFlightResult[]> {
       const requestUrl = buildSerpApiUrl(destination, config);
-      const response = await fetchImpl(requestUrl, {
-        method: "GET",
-        headers: {
-          Accept: "application/json"
-        }
-      });
+      const response = await fetchWithPoolRetry(requestUrl, config, fetchImpl);
 
       if (!response.ok) {
         const errorText = await response.text().catch(() => "");
@@ -62,8 +65,54 @@ export function createSerpApiClient(config: SerpApiClientConfig): SerpApiClient 
 
       const payload = (await response.json()) as SerpApiSearchResponse;
       return parseSerpApiSearchResponse(payload);
+    },
+
+    async searchCalendar(destination: TrackedDestination, monthYYYYMM: string): Promise<SerpApiCalendarDay[]> {
+      const requestUrl = buildSerpApiCalendarUrl(destination, monthYYYYMM, config);
+      const response = await fetchWithPoolRetry(requestUrl, config, fetchImpl);
+
+      if (!response.ok) {
+        const errorText = await response.text().catch(() => "");
+        throw new Error(
+          `SerpApi calendar request failed with status ${response.status} url=${requestUrl} body=${errorText}`
+        );
+      }
+
+      const payload = await response.json();
+      return parseSerpApiCalendarResponse(payload);
     }
   };
+}
+
+/**
+ * Executes a fetch, replacing the api_key param with the active pool key.
+ * On HTTP 429, marks the current key as exhausted and retries once with
+ * the next available key. Throws if all keys are exhausted.
+ */
+async function fetchWithPoolRetry(
+  requestUrl: string,
+  config: SerpApiClientConfig,
+  fetchImpl: typeof fetch
+): Promise<Response> {
+  const swapKey = (url: string, key: string): string =>
+    url.replace(/(api_key=)[^&]*/, `$1${encodeURIComponent(key)}`);
+
+  const activeKey = config.keyPool ? config.keyPool.getActiveKey() : config.apiKey;
+  const response = await fetchImpl(swapKey(requestUrl, activeKey), {
+    method: "GET",
+    headers: { Accept: "application/json" }
+  });
+
+  if (response.status === 429 && config.keyPool) {
+    config.keyPool.markExhausted(activeKey);
+    const nextKey = config.keyPool.getActiveKey(); // throws if all exhausted
+    return fetchImpl(swapKey(requestUrl, nextKey), {
+      method: "GET",
+      headers: { Accept: "application/json" }
+    });
+  }
+
+  return response;
 }
 
 export function parseSerpApiSearchResponse(payload: unknown): SerpApiFlightResult[] {
@@ -78,13 +127,44 @@ export function parseSerpApiSearchResponse(payload: unknown): SerpApiFlightResul
   return parseSerpApiFlightResults([...bestFlights, ...otherFlights]);
 }
 
+export function parseSerpApiCalendarResponse(payload: unknown): SerpApiCalendarDay[] {
+  if (!payload || typeof payload !== "object") return [];
+
+  const response = payload as Record<string, unknown>;
+
+  // SerpAPI Google Flights calendar may return data under different keys
+  const candidateArrays = [
+    response["flights_results"],
+    response["price_insights"],
+    response["graph_results"]
+  ];
+
+  for (const candidate of candidateArrays) {
+    if (!Array.isArray(candidate)) continue;
+
+    const days = candidate.flatMap((item: unknown): SerpApiCalendarDay[] => {
+      if (!item || typeof item !== "object") return [];
+      const entry = item as Record<string, unknown>;
+      const date = typeof entry["date"] === "string" ? entry["date"] : undefined;
+      const rawPrice = entry["price"] ?? entry["lowest_price"];
+      const price = typeof rawPrice === "number" ? rawPrice : undefined;
+      if (!date || typeof price !== "number") return [];
+      return [{ date, price }];
+    });
+
+    if (days.length > 0) return days;
+  }
+
+  return [];
+}
+
 export function buildSerpApiUrl(destination: TrackedDestination, config: SerpApiClientConfig): string {
   const baseUrl = config.baseUrl ?? DEFAULT_SERPAPI_BASE_URL;
   const url = new URL(baseUrl);
   const params = url.searchParams;
 
   params.set("engine", "google_flights");
-  params.set("api_key", config.apiKey);
+  params.set("api_key", config.apiKey); // will be swapped by fetchWithPoolRetry
   params.set("departure_id", destination.originAirportCode);
   params.set("arrival_id", destination.destinationAirportCode);
   params.set("gl", extractGoogleMarket(destination.locale));
@@ -108,6 +188,33 @@ export function buildSerpApiUrl(destination: TrackedDestination, config: SerpApi
   return url.toString();
 }
 
+export function buildSerpApiCalendarUrl(
+  destination: TrackedDestination,
+  monthYYYYMM: string,
+  config: SerpApiClientConfig
+): string {
+  const baseUrl = config.baseUrl ?? DEFAULT_SERPAPI_BASE_URL;
+  const url = new URL(baseUrl);
+  const params = url.searchParams;
+
+  params.set("engine", "google_flights");
+  params.set("api_key", config.apiKey); // will be swapped by fetchWithPoolRetry
+  params.set("departure_id", destination.originAirportCode);
+  params.set("arrival_id", destination.destinationAirportCode);
+  params.set("gl", extractGoogleMarket(destination.locale));
+  params.set("hl", extractGoogleLanguage(destination.locale));
+  params.set("currency", destination.currencyCode);
+  params.set("type", "3"); // price calendar mode
+  params.set("travel_class", mapCabinClass(destination.cabinClass));
+  params.set("outbound_date", monthYYYYMM);
+
+  if (typeof destination.maxStops === "number") {
+    params.set("stops", String(destination.maxStops));
+  }
+
+  return url.toString();
+}
+
 function normalizeSerpApiFlightResult(payload: unknown): unknown {
   if (!payload || typeof payload !== "object") {
     return payload;
@@ -117,7 +224,6 @@ function normalizeSerpApiFlightResult(payload: unknown): unknown {
 
   if (typeof result.price !== "number") {
     const extractedPrice = extractNumericPrice(result.price);
-
     if (typeof extractedPrice === "number") {
       result.price = extractedPrice;
     }
@@ -143,16 +249,11 @@ function extractNumericPrice(value: unknown): number | undefined {
 
 function mapCabinClass(cabinClass: TrackedDestination["cabinClass"]): string {
   switch (cabinClass) {
-    case "economy":
-      return "1";
-    case "premium_economy":
-      return "2";
-    case "business":
-      return "3";
-    case "first":
-      return "4";
-    default:
-      return "1";
+    case "economy": return "1";
+    case "premium_economy": return "2";
+    case "business": return "3";
+    case "first": return "4";
+    default: return "1";
   }
 }
 

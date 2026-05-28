@@ -32,7 +32,6 @@ export function scheduleApplicationJobs(input: ScheduleApplicationJobsInput): vo
   for (const job of input.jobs) {
     input.scheduler.schedule(job);
   }
-
   input.scheduler.start();
 }
 
@@ -41,29 +40,37 @@ export function buildApplicationJobSchedulePlan(input: {
   normalFaresRunner: JobRunner;
   businessDealsRunner: JobRunner;
 }): ApplicationJobSchedulePlan {
-  // Note: Local scheduling is deprecated. Use GitHub Actions for production.
-  // These defaults are only for local development.
+  // Scheduling rationale:
+  //
+  // normal-fares  → every 12 hours (configurable via NORMAL_FARES_CRON)
+  //   Phase 1 (calendar) = 1 API call per destination. Very cheap.
+  //   Phase 2 (detail)   = up to MAX_PHASE2_DATES_PER_DESTINATION calls
+  //                        per destination, only when calendar finds a deal.
+  //   2× / day keeps prices reasonably fresh within SerpAPI free-tier limits.
+  //   Bump to "0 */6 * * *" if you have a paid plan and want faster alerts.
+  //
+  // business-deals → every 2 hours (RSS-driven, no SerpAPI cost).
   return {
     scheduledJobs: [
       {
         name: input.normalFaresRunner.name,
-        cron: "0 */6 * * *", // Every 6 hours (default)
+        cron: input.env.NORMAL_FARES_CRON,
         runner: input.normalFaresRunner
       },
       {
         name: input.businessDealsRunner.name,
-        cron: "0 */2 * * *", // Every 2 hours (default)
+        cron: input.env.BUSINESS_DEALS_CRON,
         runner: input.businessDealsRunner
       }
     ],
     startupJobs: [
       {
         runner: input.normalFaresRunner,
-        enabled: true // Run on startup by default
+        enabled: input.env.RUN_NORMAL_FARES_ON_STARTUP
       },
       {
         runner: input.businessDealsRunner,
-        enabled: true // Run on startup by default
+        enabled: input.env.RUN_BUSINESS_DEALS_ON_STARTUP
       }
     ]
   };
@@ -71,10 +78,7 @@ export function buildApplicationJobSchedulePlan(input: {
 
 export async function runStartupJobs(jobs: StartupJobExecution[]): Promise<void> {
   for (const job of jobs) {
-    if (!job.enabled) {
-      continue;
-    }
-
+    if (!job.enabled) continue;
     await job.runner.run();
   }
 }
