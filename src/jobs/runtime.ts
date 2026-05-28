@@ -2,6 +2,7 @@ import { buildDiscordWebhookPayload, createDiscordWebhookClient } from "../clien
 import { createOpenAiDealExtractionClient } from "../clients/llm.js";
 import { createRssClient } from "../clients/rss.js";
 import { createSerpApiClient } from "../clients/serpapi.js";
+import { SerpApiKeyPool, parseSerpApiKeys } from "../clients/serpapi-key-pool.js";
 import { getTursoConnectionConfig, loadEnvironment, type Environment } from "../config/env.js";
 import { createTursoClient, createTursoRepository, type TursoRepository } from "../db/repositories.js";
 import { buildSerpApiObservation } from "../logic/serpapi-normalization.js";
@@ -26,10 +27,7 @@ export function createApplicationRuntime(input: NodeJS.ProcessEnv = process.env)
   const client = createTursoClient(getTursoConnectionConfig(env));
   const repository = createTursoRepository(client);
 
-  return {
-    env,
-    repository
-  };
+  return { env, repository };
 }
 
 export async function runNormalFaresFromEnvironment(input: NodeJS.ProcessEnv = process.env): Promise<void> {
@@ -42,9 +40,13 @@ export async function runBusinessDealsFromEnvironment(input: NodeJS.ProcessEnv =
 
 export function createNormalFaresJobRunner(input: NodeJS.ProcessEnv = process.env): JobRunner {
   const runtime = createApplicationRuntime(input);
+  const keyPool = buildKeyPool(runtime.env);
+
   const serpApiClient = createSerpApiClient({
-    apiKey: runtime.env.SERPAPI_API_KEY
+    apiKey: keyPool.getActiveKey(),
+    keyPool
   });
+
   const discordClient = createDiscordWebhookClient({
     webhookUrl: runtime.env.DISCORD_WEBHOOK_URL
   });
@@ -120,24 +122,28 @@ export function parseFeedConfigurations(input: string): Array<{ url: string; nam
   }
 
   return entries.map((entry, index) => {
-      const separatorIndex = entry.indexOf("|");
+    const separatorIndex = entry.indexOf("|");
 
-      if (separatorIndex === -1) {
-        return {
-          url: entry,
-          name: `feed-${index + 1}`
-        };
-      }
+    if (separatorIndex === -1) {
+      return { url: entry, name: `feed-${index + 1}` };
+    }
 
-      const name = entry.slice(0, separatorIndex).trim();
-      const url = entry.slice(separatorIndex + 1).trim();
+    const name = entry.slice(0, separatorIndex).trim();
+    const url = entry.slice(separatorIndex + 1).trim();
 
-      if (name.length === 0 || url.length === 0) {
-        throw new Error(`Invalid RSS feed configuration: ${entry}`);
-      }
+    if (name.length === 0 || url.length === 0) {
+      throw new Error(`Invalid RSS feed configuration: ${entry}`);
+    }
 
-      return { name, url };
-    });
+    return { name, url };
+  });
+}
+
+/** Build a SerpApiKeyPool from environment variables. */
+function buildKeyPool(env: Environment): SerpApiKeyPool {
+  const raw = env.SERPAPI_API_KEYS ?? env.SERPAPI_API_KEY ?? "";
+  const keys = parseSerpApiKeys(raw);
+  return new SerpApiKeyPool({ keys });
 }
 
 function buildJobLockOwner(jobName: JobName): string {

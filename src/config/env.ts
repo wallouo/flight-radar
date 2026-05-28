@@ -7,7 +7,10 @@ export const environmentSchema = z.object({
   DATABASE_AUTH_TOKEN: z.string().min(1),
   TURSO_URL: z.string().min(1).optional(),
   TURSO_AUTH_TOKEN: z.string().min(1).optional(),
-  SERPAPI_API_KEY: z.string().min(1),
+  // Single key (legacy). If SERPAPI_API_KEYS is also set, KEYS takes precedence.
+  SERPAPI_API_KEY: z.string().min(1).optional(),
+  // Comma-separated list of SerpAPI keys. Pool rotates on 429 / monthly limit.
+  SERPAPI_API_KEYS: z.string().min(1).optional(),
   SCRAPERAPI_KEY: z.string().min(1),
   OPENAI_API_KEY: z.string().min(1).optional(),
   OPENAI_MODEL: z.string().min(1).default("gpt-4o-mini"),
@@ -17,15 +20,20 @@ export const environmentSchema = z.object({
   BUSINESS_DEAL_THRESHOLD_GBP: z.coerce.number().int().positive().default(1000),
   BUSINESS_DEAL_MIN_CONFIDENCE: z.coerce.number().min(0).max(1).default(0.8),
   SCHEDULER_LEASE_DURATION_MS: z.coerce.number().int().positive().default(30 * 60 * 1000),
-  // Default: every 48h — optimised for 3 free-tier SerpAPI keys + 7 destinations.
-  // Bump to "0 */12 * * *" or "0 */6 * * *" if you have a paid plan.
-  NORMAL_FARES_CRON: z.string().min(1).default("0 0 */2 * *"),
+  // Default: every 24h. Phase 1 calendar pre-screening keeps actual API usage low
+  // even at this frequency — Phase 2 only fires when a date beats the top-3 threshold.
+  // Bump to "0 */12 * * *" for faster alerts on a paid SerpAPI plan.
+  NORMAL_FARES_CRON: z.string().min(1).default("0 0 * * *"),
   BUSINESS_DEALS_CRON: z.string().min(1).default("0 */2 * * *"),
   RUN_NORMAL_FARES_ON_STARTUP: z.coerce.boolean().default(true),
   RUN_BUSINESS_DEALS_ON_STARTUP: z.coerce.boolean().default(true)
 })
   .refine(
-    (env) => Boolean(env.SERPAPI_API_KEY ?? env.SERPAPI_API_KEYS),
+    (env) => {
+      const singleKey = env.SERPAPI_API_KEY?.trim();
+      const multipleKeys = env.SERPAPI_API_KEYS?.trim();
+      return Boolean(multipleKeys || singleKey);
+    },
     { message: "Either SERPAPI_API_KEY or SERPAPI_API_KEYS must be set" }
   )
   .transform((env) => ({
@@ -46,4 +54,3 @@ export function getTursoConnectionConfig(env: Environment): TursoConnectionConfi
     authToken: env.DATABASE_AUTH_TOKEN
   };
 }
-

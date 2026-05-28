@@ -11,6 +11,8 @@ A TypeScript service for monitoring flight prices and curated travel deal feeds,
 - **AI-Powered Extraction**: Uses GPT-4o-mini to accurately extract structured deal details (origin, destination, price, cabin class) directly from feed descriptions.
 - **Business-Class Deal Alerts**: Automatically sends Discord webhook notifications for business-class deals that match configured price thresholds and confidence scores.
 - **Robust Tools**: Includes built-in scripts for database initialization, destination seeding, syncing, and fare history bootstrapping.
+<img width="1426" height="633" alt="image" src="https://github.com/user-attachments/assets/ffbc5165-45d3-4d6b-b548-44ac665b74d1" />
+<img width="1438" height="633" alt="image" src="https://github.com/user-attachments/assets/ca5c5bf4-dcfa-4e75-aaf6-5eaeaf2f8e67" />
 
 ## Tech Stack
 

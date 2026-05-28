@@ -34,7 +34,7 @@ jobs:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
           DATABASE_AUTH_TOKEN: ${{ secrets.DATABASE_AUTH_TOKEN }}
           # APIs
-          SERPAPI_API_KEY: ${{ secrets.SERPAPI_API_KEY }}
+          SERPAPI_API_KEYS: ${{ secrets.SERPAPI_API_KEYS }}
           SCRAPERAPI_KEY: ${{ secrets.SCRAPERAPI_KEY }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           OPENAI_MODEL: ${{ secrets.OPENAI_MODEL }}
