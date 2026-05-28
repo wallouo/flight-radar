@@ -16,12 +16,23 @@ export const environmentSchema = z.object({
   DISCORD_WEBHOOK_URL: z.string().url(),
   BUSINESS_DEAL_THRESHOLD_GBP: z.coerce.number().int().positive().default(1000),
   BUSINESS_DEAL_MIN_CONFIDENCE: z.coerce.number().min(0).max(1).default(0.8),
-  SCHEDULER_LEASE_DURATION_MS: z.coerce.number().int().positive().default(30 * 60 * 1000)
-}).transform((env) => ({
-  ...env,
-  DATABASE_URL: env.TURSO_URL ?? env.DATABASE_URL,
-  DATABASE_AUTH_TOKEN: env.TURSO_AUTH_TOKEN ?? env.DATABASE_AUTH_TOKEN
-}));
+  SCHEDULER_LEASE_DURATION_MS: z.coerce.number().int().positive().default(30 * 60 * 1000),
+  // Default: every 48h — optimised for 3 free-tier SerpAPI keys + 7 destinations.
+  // Bump to "0 */12 * * *" or "0 */6 * * *" if you have a paid plan.
+  NORMAL_FARES_CRON: z.string().min(1).default("0 0 */2 * *"),
+  BUSINESS_DEALS_CRON: z.string().min(1).default("0 */2 * * *"),
+  RUN_NORMAL_FARES_ON_STARTUP: z.coerce.boolean().default(true),
+  RUN_BUSINESS_DEALS_ON_STARTUP: z.coerce.boolean().default(true)
+})
+  .refine(
+    (env) => Boolean(env.SERPAPI_API_KEY ?? env.SERPAPI_API_KEYS),
+    { message: "Either SERPAPI_API_KEY or SERPAPI_API_KEYS must be set" }
+  )
+  .transform((env) => ({
+    ...env,
+    DATABASE_URL: env.TURSO_URL ?? env.DATABASE_URL,
+    DATABASE_AUTH_TOKEN: env.TURSO_AUTH_TOKEN ?? env.DATABASE_AUTH_TOKEN
+  }));
 
 export type Environment = z.infer<typeof environmentSchema>;
 
