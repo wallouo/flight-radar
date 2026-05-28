@@ -83,8 +83,13 @@ async function main(): Promise<void> {
     authToken: env.DATABASE_AUTH_TOKEN
   });
   const repository = createTursoRepository(client);
+  const serpApiApiKey = env.SERPAPI_API_KEY;
+  if (!serpApiApiKey) {
+    throw new Error("[bootstrap-fare-history] SERPAPI_API_KEY is required");
+  }
+
   const serpApiClient = createSerpApiClient({
-    apiKey: env.SERPAPI_API_KEY
+    apiKey: serpApiApiKey
   });
 
   const destinations = await repository.listActiveTrackedDestinations();
