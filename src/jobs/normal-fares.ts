@@ -19,6 +19,7 @@ const airportSearchExpansions: Readonly<Record<string, string[]>> = {};
 const MAX_PHASE2_DATES_PER_DESTINATION = 3;
 
 const MIN_ADVANCE_DAYS = 14;
+const DEFAULT_TRIP_LENGTH_DAYS = 5;
 
 export interface NormalFaresJobDeps {
     repository: FlightPriceRepository;
@@ -42,12 +43,6 @@ function addDays(dateStr: string, days: number): string {
     return d.toISOString().slice(0, 10);
 }
 
-function diffDays(from: string, to: string): number {
-    const a = new Date(`${from}T00:00:00Z`);
-    const b = new Date(`${to}T00:00:00Z`);
-    return Math.round((b.getTime() - a.getTime()) / 86400000);
-}
-
 function minAdvanceDateString(minAdvanceDays: number): string {
     return addDays(todayAsDateString(), minAdvanceDays);
 }
@@ -62,23 +57,23 @@ export async function runNormalFaresJob(deps: NormalFaresJobDeps): Promise<void>
 
         for (const originAirportCode of expandedOrigins) {
             if (!destination.departureDateFrom) {
-                console.info(`[normal-fares] skipping ${originAirportCode}->${destination.destinationAirportCode}: no departureDateFrom configured`);
+                console.info(
+                    `[normal-fares] skipping ${originAirportCode}->${destination.destinationAirportCode}: no departureDateFrom configured`
+                );
                 continue;
             }
 
             if (!destination.departureDateTo) {
-                console.info(`[normal-fares] skipping ${originAirportCode}->${destination.destinationAirportCode}: no departureDateTo configured`);
-                continue;
-            }
-
-            const tripLengthDays = diffDays(destination.departureDateFrom, destination.departureDateTo);
-            if (tripLengthDays <= 0) {
-                console.warn(`[normal-fares] skipping ${originAirportCode}->${destination.destinationAirportCode}: invalid trip length`);
+                console.info(
+                    `[normal-fares] skipping ${originAirportCode}->${destination.destinationAirportCode}: no departureDateTo configured`
+                );
                 continue;
             }
 
             if (destination.departureDateTo < minValidDate) {
-                console.info(`[normal-fares] skipping ${originAirportCode}->${destination.destinationAirportCode}: search window entirely before ${minValidDate}`);
+                console.info(
+                    `[normal-fares] skipping ${originAirportCode}->${destination.destinationAirportCode}: search window entirely before ${minValidDate}`
+                );
                 continue;
             }
 
@@ -95,7 +90,7 @@ export async function runNormalFaresJob(deps: NormalFaresJobDeps): Promise<void>
 
             const departureWindowFrom = adjustedDepartureFrom;
             const departureWindowTo = destination.departureDateTo;
-
+            const tripLengthDays = DEFAULT_TRIP_LENGTH_DAYS;
             const calendarReturnDate = addDays(adjustedDepartureFrom, tripLengthDays);
 
             const calendarQueryDestination: TrackedDestination = {
@@ -115,7 +110,9 @@ export async function runNormalFaresJob(deps: NormalFaresJobDeps): Promise<void>
             );
 
             if (candidateDates.length === 0) {
-                console.info(`[normal-fares] no calendar candidates for ${originAirportCode}->${destination.destinationAirportCode}`);
+                console.info(
+                    `[normal-fares] no calendar candidates for ${originAirportCode}->${destination.destinationAirportCode}`
+                );
                 continue;
             }
 
