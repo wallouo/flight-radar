@@ -200,8 +200,9 @@ export function buildSerpApiCalendarUrl(
   const params = url.searchParams;
 
   // For calendar/price graph queries, SerpAPI requires multi_city_json format
+  // with date in YYYY-MM-DD format (use first day of month)
   const multiCitySegment = {
-    date: monthYYYYMM,
+    date: `${monthYYYYMM}-01`,
     departure_id: destination.originAirportCode,
     arrival_id: destination.destinationAirportCode
   };
