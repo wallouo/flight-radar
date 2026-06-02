@@ -134,6 +134,9 @@ export function parseSerpApiCalendarResponse(payload: unknown): SerpApiCalendarD
 
   const response = payload as Record<string, unknown>;
 
+  // Debug: log response keys to understand the structure
+  console.log("[serpapi] calendar response keys:", Object.keys(response));
+
   // SerpAPI Google Flights calendar may return data under different keys
   const candidateArrays = [
     response["flights_results"],
@@ -143,6 +146,8 @@ export function parseSerpApiCalendarResponse(payload: unknown): SerpApiCalendarD
 
   for (const candidate of candidateArrays) {
     if (!Array.isArray(candidate)) continue;
+
+    console.log("[serpapi] found candidate array with", candidate.length, "items");
 
     const days = candidate.flatMap((item: unknown): SerpApiCalendarDay[] => {
       if (!item || typeof item !== "object") return [];
