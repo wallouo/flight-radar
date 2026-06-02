@@ -91,14 +91,13 @@ export async function runNormalFaresJob(deps: NormalFaresJobDeps): Promise<void>
             const departureWindowFrom = adjustedDepartureFrom;
             const departureWindowTo = destination.departureDateTo;
             const tripLengthDays = DEFAULT_TRIP_LENGTH_DAYS;
-            const calendarReturnDate = addDays(adjustedDepartureFrom, tripLengthDays);
 
+            // Phase 1: 強制使用單程票 (one_way) 來查日曆，只找出發日期的便宜點
             const calendarQueryDestination: TrackedDestination = {
                 ...destination,
                 originAirportCode,
                 departureDateFrom: adjustedDepartureFrom,
-                departureDateTo: calendarReturnDate,
-                returnDateFrom: calendarReturnDate
+                tripType: "one_way" // 強制改為單程
             };
 
             const candidateDates = await runCalendarPhase(
@@ -124,7 +123,8 @@ export async function runNormalFaresJob(deps: NormalFaresJobDeps): Promise<void>
                 );
 
                 const searchDestination: TrackedDestination = {
-                    ...calendarQueryDestination,
+                    ...destination, // 使用原始的 destination (包含原本的 tripType)
+                    originAirportCode,
                     departureDateFrom: departDate,
                     departureDateTo: returnDate,
                     returnDateFrom: returnDate
@@ -203,7 +203,7 @@ async function runCalendarPhase(
 ): Promise<string[]> {
     console.info(
         `[normal-fares] phase 1 ${calendarQueryDestination.originAirportCode}->${calendarQueryDestination.destinationAirportCode}: ` +
-        `outbound=${calendarQueryDestination.departureDateFrom} return=${calendarQueryDestination.returnDateFrom}`
+        `outbound=${calendarQueryDestination.departureDateFrom} tripType=${calendarQueryDestination.tripType}`
     );
 
     let calendarDays;
