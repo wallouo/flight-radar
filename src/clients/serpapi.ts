@@ -197,16 +197,21 @@ export function buildSerpApiCalendarUrl(
   const url = new URL(baseUrl);
   const params = url.searchParams;
 
+  // For calendar/price graph queries, SerpAPI requires multi_city_json format
+  const multiCitySegment = {
+    date: monthYYYYMM,
+    departure_id: destination.originAirportCode,
+    destination_id: destination.destinationAirportCode
+  };
+
   params.set("engine", "google_flights");
   params.set("api_key", config.apiKey); // will be swapped by fetchWithPoolRetry
-  params.set("departure_id", destination.originAirportCode);
-  params.set("arrival_id", destination.destinationAirportCode);
   params.set("gl", extractGoogleMarket(destination.locale));
   params.set("hl", extractGoogleLanguage(destination.locale));
   params.set("currency", destination.currencyCode);
   params.set("type", "3"); // price calendar mode
   params.set("travel_class", mapCabinClass(destination.cabinClass));
-  params.set("outbound_date", monthYYYYMM);
+  params.set("multi_city_json", JSON.stringify([multiCitySegment]));
 
   if (typeof destination.maxStops === "number") {
     params.set("stops", String(destination.maxStops));
