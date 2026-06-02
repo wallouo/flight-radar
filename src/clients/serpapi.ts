@@ -134,8 +134,11 @@ export function parseSerpApiCalendarResponse(payload: unknown): SerpApiCalendarD
 
   const response = payload as Record<string, unknown>;
 
-  // Debug: log response keys to understand the structure
+  // Debug: log response keys and error if present
   console.log("[serpapi] calendar response keys:", Object.keys(response));
+  if (response["error"]) {
+    console.log("[serpapi] calendar error:", JSON.stringify(response["error"]));
+  }
 
   // SerpAPI Google Flights calendar may return data under different keys
   const candidateArrays = [
