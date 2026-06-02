@@ -3,7 +3,7 @@ import type { DealExtractionClient } from "../clients/llm.js";
 import type { RssClient } from "../clients/rss.js";
 import type { BusinessDealRepository } from "../db/repositories.js";
 import { qualifiesBusinessDealForAlert } from "../logic/business-deals.js";
-import { buildBusinessDealEmbed, buildErrorFareDealEmbed } from "../notifications/business-deal-embed.js";
+import { buildBusinessDealEmbed } from "../notifications/business-deal-embed.js";
 import { hashString } from "../utils/hash.js";
 import { createStableId } from "../utils/id.js";
 import {
@@ -53,8 +53,6 @@ export async function runBusinessDealsJob(
       }
 
       const parsed = await deps.extractionClient.extractBusinessDeal(item);
-      const isErrorFare = parsed.isErrorFare === true;
-
       const qualifiesForAlert = qualifiesBusinessDealForAlert(
         parsed,
         deps.thresholdGbp,
@@ -64,13 +62,7 @@ export async function runBusinessDealsJob(
       let discordMessageId: string | undefined;
       let alertSentAt: string | undefined;
 
-      if (isErrorFare) {
-        // Send a red-marked error fare notification separately
-        console.log(`[jobs] business-deals detected error fare: ${parsed.origin} -> ${parsed.destination} (${parsed.priceText})`);
-        const response = await deps.discordClient.sendEmbed(buildErrorFareDealEmbed(item, parsed));
-        discordMessageId = response.messageId;
-        alertSentAt = new Date().toISOString();
-      } else if (qualifiesForAlert) {
+      if (qualifiesForAlert) {
         const response = await deps.discordClient.sendEmbed(buildBusinessDealEmbed(item, parsed));
         discordMessageId = response.messageId;
         alertSentAt = new Date().toISOString();
