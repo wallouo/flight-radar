@@ -28,13 +28,10 @@ export interface NormalFaresJobDeps {
     destination: Parameters<SerpApiClient["searchFlights"]>[0];
     result: SerpApiFlightResult;
   }) => NormalizedFareObservation;
-  /** Override the scan month (YYYY-MM). Defaults to next calendar month. */
-  scanMonthOverride?: string;
 }
 
 export async function runNormalFaresJob(deps: NormalFaresJobDeps): Promise<void> {
   const destinations = await deps.repository.listActiveTrackedDestinations();
-  const scanMonth = deps.scanMonthOverride ?? buildNextMonthYYYYMM();
 
   for (const destination of destinations) {
     const expandedOrigins = buildExpandedOrigins(destination);
@@ -42,12 +39,20 @@ export async function runNormalFaresJob(deps: NormalFaresJobDeps): Promise<void>
     for (const originAirportCode of expandedOrigins) {
       const searchBase: TrackedDestination = { ...destination, originAirportCode };
 
+      // Skip if destination has no configured departure date range
+      if (!searchBase.departureDateFrom) {
+        console.info(
+          `[normal-fares] skipping ${originAirportCode}->${destination.destinationAirportCode}: no departureDateFrom configured`
+        );
+        continue;
+      }
+
       // ── Phase 1: calendar scan (1 API call per origin) ─────────────────
-      const candidateDates = await runCalendarPhase(deps, searchBase, scanMonth);
+      const candidateDates = await runCalendarPhase(deps, searchBase);
 
       if (candidateDates.length === 0) {
         console.info(
-          `[normal-fares] no calendar candidates for ${originAirportCode}->${destination.destinationAirportCode} in ${scanMonth}`
+          `[normal-fares] no calendar candidates for ${originAirportCode}->${destination.destinationAirportCode}`
         );
         continue;
       }
@@ -119,18 +124,18 @@ export async function runNormalFaresJob(deps: NormalFaresJobDeps): Promise<void>
 }
 
 /**
- * Phase 1: fetch the price calendar for the given month, filter dates
- * within the destination's configured range, pre-screen against the
+ * Phase 1: fetch the price calendar using the destination's departureDateFrom,
+ * filter dates within the destination's configured range, pre-screen against the
  * historical top-3 threshold, and return up to MAX_PHASE2_DATES cheapest.
  */
 async function runCalendarPhase(
   deps: NormalFaresJobDeps,
-  destination: TrackedDestination,
-  scanMonth: string
+  destination: TrackedDestination
 ): Promise<string[]> {
   let calendarDays;
   try {
-    calendarDays = await deps.serpApiClient.searchCalendar(destination, scanMonth);
+    // Use the destination's actual departure date for the calendar query
+    calendarDays = await deps.serpApiClient.searchCalendar(destination, destination.departureDateFrom!);
   } catch (error) {
     console.warn(
       `[normal-fares] calendar scan failed for ` +
@@ -157,14 +162,6 @@ async function runCalendarPhase(
     .filter((day) => decimalToMinorUnits(day.price) < thirdLowestMinor)
     .slice(0, MAX_PHASE2_DATES_PER_DESTINATION)
     .map((day) => day.date);
-}
-
-/** Returns YYYY-MM for the next calendar month relative to today. */
-export function buildNextMonthYYYYMM(now: Date = new Date()): string {
-  const next = new Date(now.getFullYear(), now.getMonth() + 1, 1);
-  const year = next.getFullYear();
-  const month = String(next.getMonth() + 1).padStart(2, "0");
-  return `${year}-${month}`;
 }
 
 function isWithinDepartureDateRange(

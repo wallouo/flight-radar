@@ -4,7 +4,7 @@ import type { SerpApiKeyPool } from "./serpapi-key-pool.js";
 
 export interface SerpApiClient {
   searchFlights(destination: TrackedDestination): Promise<SerpApiFlightResult[]>;
-  searchCalendar(destination: TrackedDestination, monthYYYYMM: string): Promise<SerpApiCalendarDay[]>;
+  searchCalendar(destination: TrackedDestination, dateYYYYMMDD: string): Promise<SerpApiCalendarDay[]>;
 }
 
 export interface SerpApiCalendarDay {
@@ -67,8 +67,8 @@ export function createSerpApiClient(config: SerpApiClientConfig): SerpApiClient 
       return parseSerpApiSearchResponse(payload);
     },
 
-    async searchCalendar(destination: TrackedDestination, monthYYYYMM: string): Promise<SerpApiCalendarDay[]> {
-      const requestUrl = buildSerpApiCalendarUrl(destination, monthYYYYMM, config);
+    async searchCalendar(destination: TrackedDestination, dateYYYYMMDD: string): Promise<SerpApiCalendarDay[]> {
+      const requestUrl = buildSerpApiCalendarUrl(destination, dateYYYYMMDD, config);
       const response = await fetchWithPoolRetry(requestUrl, config, fetchImpl);
 
       if (!response.ok) {
@@ -200,29 +200,29 @@ export function buildSerpApiUrl(destination: TrackedDestination, config: SerpApi
 
 export function buildSerpApiCalendarUrl(
   destination: TrackedDestination,
-  monthYYYYMM: string,
+  dateYYYYMMDD: string,
   config: SerpApiClientConfig
 ): string {
   const baseUrl = config.baseUrl ?? DEFAULT_SERPAPI_BASE_URL;
   const url = new URL(baseUrl);
   const params = url.searchParams;
 
-  // For calendar/price graph queries, SerpAPI requires multi_city_json format
-  // with date in YYYY-MM-DD format (use first day of month)
-  const multiCitySegment = {
-    date: `${monthYYYYMM}-01`,
-    departure_id: destination.originAirportCode,
-    arrival_id: destination.destinationAirportCode
-  };
-
+  // For price calendar/graph, we query with a specific date and Google Flights
+  // will return price_insights with data for nearby dates
   params.set("engine", "google_flights");
   params.set("api_key", config.apiKey); // will be swapped by fetchWithPoolRetry
+  params.set("departure_id", destination.originAirportCode);
+  params.set("arrival_id", destination.destinationAirportCode);
   params.set("gl", extractGoogleMarket(destination.locale));
   params.set("hl", extractGoogleLanguage(destination.locale));
   params.set("currency", destination.currencyCode);
-  params.set("type", "3"); // price calendar mode
+  params.set("type", destination.tripType === "one_way" ? "2" : "1");
   params.set("travel_class", mapCabinClass(destination.cabinClass));
-  params.set("multi_city_json", JSON.stringify([multiCitySegment]));
+  params.set("outbound_date", dateYYYYMMDD);
+
+  if (destination.tripType === "round_trip" && destination.returnDateFrom) {
+    params.set("return_date", destination.returnDateFrom);
+  }
 
   if (typeof destination.maxStops === "number") {
     params.set("stops", String(destination.maxStops));
