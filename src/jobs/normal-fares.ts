@@ -93,13 +93,23 @@ export async function runNormalFaresJob(deps: NormalFaresJobDeps): Promise<void>
                 );
             }
 
-            const searchBase: TrackedDestination = {
+            const departureWindowFrom = adjustedDepartureFrom;
+            const departureWindowTo = destination.departureDateTo;
+
+            const calendarQueryDestination: TrackedDestination = {
                 ...destination,
                 originAirportCode,
-                departureDateFrom: adjustedDepartureFrom
+                departureDateFrom: adjustedDepartureFrom,
+                departureDateTo: addDays(adjustedDepartureFrom, tripLengthDays)
             };
 
-            const candidateDates = await runCalendarPhase(deps, searchBase, historicalLowestFares);
+            const candidateDates = await runCalendarPhase(
+                deps,
+                calendarQueryDestination,
+                departureWindowFrom,
+                departureWindowTo,
+                historicalLowestFares
+            );
 
             if (candidateDates.length === 0) {
                 console.info(`[normal-fares] no calendar candidates for ${originAirportCode}->${destination.destinationAirportCode}`);
@@ -114,7 +124,7 @@ export async function runNormalFaresJob(deps: NormalFaresJobDeps): Promise<void>
                 );
 
                 const searchDestination: TrackedDestination = {
-                    ...searchBase,
+                    ...calendarQueryDestination,
                     departureDateFrom: departDate,
                     departureDateTo: returnDate
                 };
@@ -185,24 +195,28 @@ export async function runNormalFaresJob(deps: NormalFaresJobDeps): Promise<void>
  */
 async function runCalendarPhase(
     deps: NormalFaresJobDeps,
-    destination: TrackedDestination,
+    calendarQueryDestination: TrackedDestination,
+    departureWindowFrom: string,
+    departureWindowTo: string,
     historicalFares: Awaited<ReturnType<FlightPriceRepository["listLowestHistoricalFares"]>>
 ): Promise<string[]> {
     let calendarDays;
     try {
-        // Use the destination's actual departure date for the calendar query
-        calendarDays = await deps.serpApiClient.searchCalendar(destination, destination.departureDateFrom!);
+        calendarDays = await deps.serpApiClient.searchCalendar(
+            calendarQueryDestination,
+            calendarQueryDestination.departureDateFrom!
+        );
     } catch (error) {
         console.warn(
             `[normal-fares] calendar scan failed for ` +
-            `${destination.originAirportCode}->${destination.destinationAirportCode}:`,
+            `${calendarQueryDestination.originAirportCode}->${calendarQueryDestination.destinationAirportCode}:`,
             error
         );
         return [];
     }
 
     const filtered = calendarDays.filter((day) =>
-        isWithinDepartureDateRange(day.date, destination.departureDateFrom, destination.departureDateTo)
+        isWithinDepartureDateRange(day.date, departureWindowFrom, departureWindowTo)
     );
 
     if (filtered.length === 0) return [];
