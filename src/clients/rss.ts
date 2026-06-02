@@ -1,6 +1,7 @@
 import { XMLParser } from "fast-xml-parser";
 import { rssItemSchema } from "../schemas/domain.js";
 import type { RssItem } from "../types/domain.js";
+import { createScraperApiKeyPool, type ScraperApiKeyPool } from "./scraperapi-key-pool.js";
 
 export interface RssHttpResponse {
   statusCode: number;
@@ -89,40 +90,74 @@ export function createRssClient(config: RssClientConfig = {}): RssClient {
   };
 }
 
-async function defaultRssHttpFetcher(request: Parameters<RssHttpFetcher>[0]): Promise<RssHttpResponse> {
-  const scraperApiKey = process.env.SCRAPERAPI_KEY;
-  
-  if (!scraperApiKey) {
-    throw new Error("SCRAPERAPI_KEY environment variable is not set");
+// Singleton key pool instance
+let keyPool: ScraperApiKeyPool | null = null;
+
+function getKeyPool(): ScraperApiKeyPool {
+  if (!keyPool) {
+    keyPool = createScraperApiKeyPool();
   }
+  return keyPool;
+}
 
-  // Build ScraperAPI URL with query parameters
-  const scraperApiUrl = new URL("http://api.scraperapi.com");
-  scraperApiUrl.searchParams.set("api_key", scraperApiKey);
-  scraperApiUrl.searchParams.set("url", request.url);
-  scraperApiUrl.searchParams.set("render", "false");
-
-  try {
-    const response = await fetch(scraperApiUrl.toString(), {
-      method: "GET",
-      headers: request.headers,
-      signal: AbortSignal.timeout(request.timeout)
-    });
-
-    const body = await response.text();
-
-    return {
-      statusCode: response.status,
-      body
-    };
-  } catch (error: any) {
-    // Handle fetch errors
-    if (error.name === "AbortError" || error.name === "TimeoutError") {
-      throw new Error(`RSS request timed out after ${request.timeout}ms`);
+async function defaultRssHttpFetcher(request: Parameters<RssHttpFetcher>[0]): Promise<RssHttpResponse> {
+  const pool = getKeyPool();
+  const maxRetries = 3;
+  
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    const scraperApiKey = pool.getNextKey();
+    
+    if (!scraperApiKey) {
+      throw new Error("All ScraperAPI keys have exhausted their monthly quota");
     }
 
-    throw error;
+    // Build ScraperAPI URL with query parameters
+    const scraperApiUrl = new URL("http://api.scraperapi.com");
+    scraperApiUrl.searchParams.set("api_key", scraperApiKey);
+    scraperApiUrl.searchParams.set("url", request.url);
+    scraperApiUrl.searchParams.set("render", "false");
+
+    try {
+      const response = await fetch(scraperApiUrl.toString(), {
+        method: "GET",
+        headers: request.headers,
+        signal: AbortSignal.timeout(request.timeout)
+      });
+
+      const body = await response.text();
+
+      // Check if this is a quota exhaustion error (403)
+      if (response.status === 403) {
+        console.warn(`[RSS Client] ScraperAPI key exhausted (403), marking and trying next key (attempt ${attempt}/${maxRetries})`);
+        pool.markKeyExhausted(scraperApiKey);
+        
+        // If this is not the last attempt, try with next key
+        if (attempt < maxRetries) {
+          continue;
+        }
+      }
+
+      return {
+        statusCode: response.status,
+        body
+      };
+    } catch (error: any) {
+      // Handle fetch errors
+      if (error.name === "AbortError" || error.name === "TimeoutError") {
+        throw new Error(`RSS request timed out after ${request.timeout}ms`);
+      }
+
+      // If it's the last attempt, throw the error
+      if (attempt === maxRetries) {
+        throw error;
+      }
+
+      // Otherwise, log and retry with next key
+      console.warn(`[RSS Client] Request failed (attempt ${attempt}/${maxRetries}):`, error.message);
+    }
   }
+
+  throw new Error("RSS request failed after all retry attempts");
 }
 
 function toHeaderObject(headers: HeadersInit | undefined): Record<string, string> {

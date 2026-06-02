@@ -203,7 +203,7 @@ export function buildSerpApiCalendarUrl(
   const multiCitySegment = {
     date: monthYYYYMM,
     departure_id: destination.originAirportCode,
-    destination_id: destination.destinationAirportCode
+    arrival_id: destination.destinationAirportCode
   };
 
   params.set("engine", "google_flights");

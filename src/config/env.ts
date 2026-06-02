@@ -11,7 +11,10 @@ export const environmentSchema = z.object({
   SERPAPI_API_KEY: z.string().min(1).optional(),
   // Comma-separated list of SerpAPI keys. Pool rotates on 429 / monthly limit.
   SERPAPI_API_KEYS: z.string().min(1).optional(),
-  SCRAPERAPI_KEY: z.string().min(1),
+  // Single key (legacy). If SCRAPERAPI_API_KEYS is also set, KEYS takes precedence.
+  SCRAPERAPI_KEY: z.string().min(1).optional(),
+  // Comma-separated list of ScraperAPI keys. Pool rotates on 403 / monthly limit.
+  SCRAPERAPI_API_KEYS: z.string().min(1).optional(),
   OPENAI_API_KEY: z.string().min(1).optional(),
   OPENAI_MODEL: z.string().min(1).default("gpt-4o-mini"),
   GROQ_API_KEY: z.string().min(1).optional(),
@@ -35,6 +38,14 @@ export const environmentSchema = z.object({
       return Boolean(multipleKeys || singleKey);
     },
     { message: "Either SERPAPI_API_KEY or SERPAPI_API_KEYS must be set" }
+  )
+  .refine(
+    (env) => {
+      const singleKey = env.SCRAPERAPI_KEY?.trim();
+      const multipleKeys = env.SCRAPERAPI_API_KEYS?.trim();
+      return Boolean(multipleKeys || singleKey);
+    },
+    { message: "Either SCRAPERAPI_KEY or SCRAPERAPI_API_KEYS must be set" }
   )
   .transform((env) => ({
     ...env,
