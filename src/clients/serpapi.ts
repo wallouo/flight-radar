@@ -169,76 +169,68 @@ export function parseSerpApiCalendarResponse(payload: unknown): SerpApiCalendarD
 }
 
 export function buildSerpApiUrl(destination: TrackedDestination, config: SerpApiClientConfig): string {
-  const baseUrl = config.baseUrl ?? DEFAULT_SERPAPI_BASE_URL;
-  const url = new URL(baseUrl);
-  const params = url.searchParams;
+    const baseUrl = config.baseUrl ?? DEFAULT_SERPAPI_BASE_URL;
+    const url = new URL(baseUrl);
+    const params = url.searchParams;
 
-  params.set("engine", "google_flights");
-  params.set("api_key", config.apiKey); // will be swapped by fetchWithPoolRetry
-  params.set("departure_id", destination.originAirportCode);
-  params.set("arrival_id", destination.destinationAirportCode);
-  params.set("gl", extractGoogleMarket(destination.locale));
-  params.set("hl", extractGoogleLanguage(destination.locale));
-  params.set("currency", destination.currencyCode);
-  params.set("type", destination.tripType === "one_way" ? "2" : "1");
-  
-  if (typeof destination.maxStops === "number") {
-        // 修正映射：如果 maxStops 是 0 (代表直飛)，SerpApi 參數要設為 1
-        // 如果 maxStops 是 1，SerpApi 參數要設為 2，依此類推。
-        const serpApiStops = destination.maxStops + 1; 
+    params.set("engine", "google_flights");
+    params.set("api_key", config.apiKey); 
+    params.set("departure_id", destination.originAirportCode);
+    params.set("arrival_id", destination.destinationAirportCode);
+    params.set("gl", extractGoogleMarket(destination.locale));
+    params.set("hl", extractGoogleLanguage(destination.locale));
+    params.set("currency", destination.currencyCode);
+    params.set("type", destination.tripType === "one_way" ? "2" : "1");
+    params.set("travel_class", mapCabinClass(destination.cabinClass));
+
+    if (destination.departureDateFrom) {
+        params.set("outbound_date", destination.departureDateFrom);
+    }
+
+    if (destination.tripType === "round_trip" && destination.returnDateFrom) {
+        params.set("return_date", destination.returnDateFrom);
+    }
+
+    // 唯一正確的 stops 映射，不會再被覆寫
+    if (typeof destination.maxStops === "number") {
+        // 如果 DB 存 0 (直飛)，轉為 SerpApi 的 1
+        // 如果 DB 存 1 (轉機1次)，轉為 SerpApi 的 2
+        const serpApiStops = destination.maxStops + 1;
         params.set("stops", String(serpApiStops));
     }
-  params.set("deep_search", "true");
-  
-  params.set("travel_class", mapCabinClass(destination.cabinClass));
 
-  if (destination.departureDateFrom) {
-    params.set("outbound_date", destination.departureDateFrom);
-  }
+    // ❌ 刪除 params.set("deep_search", "true");
 
-  if (destination.tripType === "round_trip" && destination.returnDateFrom) {
-    params.set("return_date", destination.returnDateFrom);
-  }
-
-  if (typeof destination.maxStops === "number") {
-    params.set("stops", String(destination.maxStops));
-  }
-
-  return url.toString();
+    return url.toString();
 }
 
 export function buildSerpApiCalendarUrl(
-  destination: TrackedDestination,
-  dateYYYYMMDD: string,
-  config: SerpApiClientConfig
+    destination: TrackedDestination,
+    dateYYYYMMDD: string,
+    config: SerpApiClientConfig
 ): string {
-  const baseUrl = config.baseUrl ?? DEFAULT_SERPAPI_BASE_URL;
-  const url = new URL(baseUrl);
-  const params = url.searchParams;
+    const baseUrl = config.baseUrl ?? DEFAULT_SERPAPI_BASE_URL;
+    const url = new URL(baseUrl);
+    const params = url.searchParams;
 
-  // For price calendar/graph, we query with a specific date and Google Flights
-  // will return price_insights with data for nearby dates
-  params.set("engine", "google_flights");
-  params.set("api_key", config.apiKey); // will be swapped by fetchWithPoolRetry
-  params.set("departure_id", destination.originAirportCode);
-  params.set("arrival_id", destination.destinationAirportCode);
-  params.set("gl", extractGoogleMarket(destination.locale));
-  params.set("hl", extractGoogleLanguage(destination.locale));
-  params.set("currency", destination.currencyCode);
-  params.set("type", destination.tripType === "one_way" ? "2" : "1");
-  //params.set("travel_class", mapCabinClass(destination.cabinClass));
-  params.set("outbound_date", dateYYYYMMDD);
-  params.set("deep_search", "true");
+    params.set("engine", "google_flights");
+    params.set("api_key", config.apiKey); 
+    params.set("departure_id", destination.originAirportCode);
+    params.set("arrival_id", destination.destinationAirportCode);
+    params.set("gl", extractGoogleMarket(destination.locale));
+    params.set("hl", extractGoogleLanguage(destination.locale));
+    params.set("currency", destination.currencyCode);
+    params.set("type", destination.tripType === "one_way" ? "2" : "1");
+    params.set("outbound_date", dateYYYYMMDD);
+    
+    if (destination.tripType === "round_trip" && destination.returnDateFrom) {
+        params.set("return_date", destination.returnDateFrom);
+    }
 
-  if (destination.tripType === "round_trip" && destination.returnDateFrom) {
-    params.set("return_date", destination.returnDateFrom);
-  }
+    // 💡 日曆 API 建議不要帶 stops 或 travel_class 參數，讓它能抓到最多天數的價格基準
+    // ❌ 刪除 params.set("deep_search", "true");
 
-  if (typeof destination.maxStops === "number") {
-    params.set("stops", String(destination.maxStops));
-  }
-
-  return url.toString();
+    return url.toString();
 }
 
 function normalizeSerpApiFlightResult(payload: unknown): unknown {
