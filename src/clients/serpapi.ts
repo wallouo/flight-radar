@@ -181,6 +181,13 @@ export function buildSerpApiUrl(destination: TrackedDestination, config: SerpApi
   params.set("hl", extractGoogleLanguage(destination.locale));
   params.set("currency", destination.currencyCode);
   params.set("type", destination.tripType === "one_way" ? "2" : "1");
+  
+  if (typeof destination.maxStops === "number") {
+        // 修正映射：如果 maxStops 是 0 (代表直飛)，SerpApi 參數要設為 1
+        // 如果 maxStops 是 1，SerpApi 參數要設為 2，依此類推。
+        const serpApiStops = destination.maxStops + 1; 
+        params.set("stops", String(serpApiStops));
+    }
   params.set("deep_search", "true");
   
   // params.set("travel_class", mapCabinClass(destination.cabinClass));
@@ -219,7 +226,7 @@ export function buildSerpApiCalendarUrl(
   params.set("hl", extractGoogleLanguage(destination.locale));
   params.set("currency", destination.currencyCode);
   params.set("type", destination.tripType === "one_way" ? "2" : "1");
-  params.set("travel_class", mapCabinClass(destination.cabinClass));
+  //params.set("travel_class", mapCabinClass(destination.cabinClass));
   params.set("outbound_date", dateYYYYMMDD);
   params.set("deep_search", "true");
 
