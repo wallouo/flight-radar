@@ -181,11 +181,11 @@ export function buildSerpApiUrl(destination: TrackedDestination, config: SerpApi
   params.set("hl", extractGoogleLanguage(destination.locale));
   params.set("currency", destination.currencyCode);
   params.set("type", destination.tripType === "one_way" ? "2" : "1");
-  params.set("travel_class", mapCabinClass(destination.cabinClass));
+  // params.set("travel_class", mapCabinClass(destination.cabinClass));
 
-  if (destination.departureDateFrom) {
-    params.set("outbound_date", destination.departureDateFrom);
-  }
+  //if (destination.departureDateFrom) {
+  //  params.set("outbound_date", destination.departureDateFrom);
+ // }
 
   if (destination.tripType === "round_trip" && destination.returnDateFrom) {
     params.set("return_date", destination.returnDateFrom);
