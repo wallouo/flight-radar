@@ -86,8 +86,9 @@ export function createSerpApiClient(config: SerpApiClientConfig): SerpApiClient 
 
 /**
  * Executes a fetch, replacing the api_key param with the active pool key.
- * On HTTP 429, marks the current key as exhausted and retries once with
- * the next available key. Throws if all keys are exhausted.
+ * On HTTP 403 (quota exhausted) or 429 (rate limit), marks the current key 
+ * as exhausted and retries once with the next available key. 
+ * Throws if all keys are exhausted.
  */
 async function fetchWithPoolRetry(
   requestUrl: string,
@@ -103,7 +104,8 @@ async function fetchWithPoolRetry(
     headers: { Accept: "application/json" }
   });
 
-  if (response.status === 429 && config.keyPool) {
+  // SerpAPI returns 403 when quota is exhausted, 429 for rate limiting
+  if ((response.status === 403 || response.status === 429) && config.keyPool) {
     config.keyPool.markExhausted(activeKey);
     const nextKey = config.keyPool.getActiveKey(); // throws if all exhausted
     return fetchImpl(swapKey(requestUrl, nextKey), {
