@@ -96,11 +96,14 @@ export async function runNormalFaresJob(deps: NormalFaresJobDeps): Promise<void>
             const departureWindowFrom = adjustedDepartureFrom;
             const departureWindowTo = destination.departureDateTo;
 
+            const calendarReturnDate = addDays(adjustedDepartureFrom, tripLengthDays);
+
             const calendarQueryDestination: TrackedDestination = {
                 ...destination,
                 originAirportCode,
                 departureDateFrom: adjustedDepartureFrom,
-                departureDateTo: addDays(adjustedDepartureFrom, tripLengthDays)
+                departureDateTo: calendarReturnDate,
+                returnDateFrom: calendarReturnDate
             };
 
             const candidateDates = await runCalendarPhase(
@@ -126,7 +129,8 @@ export async function runNormalFaresJob(deps: NormalFaresJobDeps): Promise<void>
                 const searchDestination: TrackedDestination = {
                     ...calendarQueryDestination,
                     departureDateFrom: departDate,
-                    departureDateTo: returnDate
+                    departureDateTo: returnDate,
+                    returnDateFrom: returnDate
                 };
 
                 const results = await deps.serpApiClient.searchFlights(searchDestination);
@@ -200,6 +204,11 @@ async function runCalendarPhase(
     departureWindowTo: string,
     historicalFares: Awaited<ReturnType<FlightPriceRepository["listLowestHistoricalFares"]>>
 ): Promise<string[]> {
+    console.info(
+        `[normal-fares] phase 1 ${calendarQueryDestination.originAirportCode}->${calendarQueryDestination.destinationAirportCode}: ` +
+        `outbound=${calendarQueryDestination.departureDateFrom} return=${calendarQueryDestination.returnDateFrom}`
+    );
+
     let calendarDays;
     try {
         calendarDays = await deps.serpApiClient.searchCalendar(
