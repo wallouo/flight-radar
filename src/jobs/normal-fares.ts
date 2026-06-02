@@ -12,11 +12,11 @@ import { decimalToMinorUnits } from "../utils/currency.js";
 const airportSearchExpansions: Readonly<Record<string, string[]>> = {};
 
 /**
- * Max candidate dates per destination that proceed from Phase 1 to Phase 2.
+ * Number of consecutive departure dates to scan per destination.
  * Lowered to 3 to stay within free-tier SerpAPI limits (300 calls/month total
  * across 3 keys, 7 LON destinations, scanning every 48 hours).
  */
-const MAX_PHASE2_DATES_PER_DESTINATION = 3;
+const SCAN_WINDOW_DAYS = 3;
 
 const MIN_ADVANCE_DAYS = 14;
 const DEFAULT_TRIP_LENGTH_DAYS = 5;
@@ -45,6 +45,15 @@ function addDays(dateStr: string, days: number): string {
 
 function minAdvanceDateString(minAdvanceDays: number): string {
     return addDays(todayAsDateString(), minAdvanceDays);
+}
+
+// 從指定日期開始，產生連續 N 天的日期字串陣列
+function generateCandidateDates(startDateStr: string, numberOfDays: number): string[] {
+    const dates: string[] = [];
+    for (let i = 0; i < numberOfDays; i++) {
+        dates.push(addDays(startDateStr, i));
+    }
+    return dates;
 }
 
 export async function runNormalFaresJob(deps: NormalFaresJobDeps): Promise<void> {
@@ -88,32 +97,13 @@ export async function runNormalFaresJob(deps: NormalFaresJobDeps): Promise<void>
                 );
             }
 
-            const departureWindowFrom = adjustedDepartureFrom;
-            const departureWindowTo = destination.departureDateTo;
             const tripLengthDays = DEFAULT_TRIP_LENGTH_DAYS;
 
-            // Phase 1: 強制使用單程票 (one_way) 來查日曆，只找出發日期的便宜點
-            const calendarQueryDestination: TrackedDestination = {
-                ...destination,
-                originAirportCode,
-                departureDateFrom: adjustedDepartureFrom,
-                tripType: "one_way" // 強制改為單程
-            };
+            const candidateDates = generateCandidateDates(adjustedDepartureFrom, SCAN_WINDOW_DAYS);
 
-            const candidateDates = await runCalendarPhase(
-                deps,
-                calendarQueryDestination,
-                departureWindowFrom,
-                departureWindowTo,
-                historicalLowestFares
+            console.info(
+                `[normal-fares] generated ${candidateDates.length} candidate date(s) locally for Phase 2: ${candidateDates.join(", ")}`
             );
-
-            if (candidateDates.length === 0) {
-                console.info(
-                    `[normal-fares] no calendar candidates for ${originAirportCode}->${destination.destinationAirportCode}`
-                );
-                continue;
-            }
 
             for (const departDate of candidateDates) {
                 const returnDate = addDays(departDate, tripLengthDays);
@@ -123,7 +113,7 @@ export async function runNormalFaresJob(deps: NormalFaresJobDeps): Promise<void>
                 );
 
                 const searchDestination: TrackedDestination = {
-                    ...destination, // 使用原始的 destination (包含原本的 tripType)
+                    ...destination,
                     originAirportCode,
                     departureDateFrom: departDate,
                     departureDateTo: returnDate,
@@ -187,67 +177,6 @@ export async function runNormalFaresJob(deps: NormalFaresJobDeps): Promise<void>
             }
         }
     }
-}
-
-/**
- * Phase 1: fetch the price calendar using the destination's departureDateFrom,
- * filter dates within the destination's configured range, pre-screen against the
- * historical top-3 threshold, and return up to MAX_PHASE2_DATES cheapest.
- */
-async function runCalendarPhase(
-    deps: NormalFaresJobDeps,
-    calendarQueryDestination: TrackedDestination,
-    departureWindowFrom: string,
-    departureWindowTo: string,
-    historicalFares: Awaited<ReturnType<FlightPriceRepository["listLowestHistoricalFares"]>>
-): Promise<string[]> {
-    console.info(
-        `[normal-fares] phase 1 ${calendarQueryDestination.originAirportCode}->${calendarQueryDestination.destinationAirportCode}: ` +
-        `outbound=${calendarQueryDestination.departureDateFrom} tripType=${calendarQueryDestination.tripType}`
-    );
-
-    let calendarDays;
-    try {
-        calendarDays = await deps.serpApiClient.searchCalendar(
-            calendarQueryDestination,
-            calendarQueryDestination.departureDateFrom!
-        );
-    } catch (error) {
-        console.warn(
-            `[normal-fares] calendar scan failed for ` +
-            `${calendarQueryDestination.originAirportCode}->${calendarQueryDestination.destinationAirportCode}:`,
-            error
-        );
-        return [];
-    }
-
-    const filtered = calendarDays.filter((day) =>
-        isWithinDepartureDateRange(day.date, departureWindowFrom, departureWindowTo)
-    );
-
-    if (filtered.length === 0) return [];
-
-    const thirdLowestMinor =
-        historicalFares.length >= 3
-            ? historicalFares.map((f) => f.priceAmountMinor).sort((a, b) => a - b)[2]
-            : Infinity;
-
-    return filtered
-        .sort((a, b) => a.price - b.price)
-        .filter((day) => decimalToMinorUnits(day.price) < thirdLowestMinor)
-        .slice(0, MAX_PHASE2_DATES_PER_DESTINATION)
-        .map((day) => day.date);
-}
-
-function isWithinDepartureDateRange(
-    date: string,
-    from?: string,
-    to?: string
-): boolean {
-    if (!from && !to) return true;
-    if (from && date < from) return false;
-    if (to && date > to) return false;
-    return true;
 }
 
 function buildExpandedOrigins(destination: TrackedDestination): string[] {
