@@ -190,11 +190,11 @@ export function buildSerpApiUrl(destination: TrackedDestination, config: SerpApi
     }
   params.set("deep_search", "true");
   
-  // params.set("travel_class", mapCabinClass(destination.cabinClass));
+  params.set("travel_class", mapCabinClass(destination.cabinClass));
 
-  //if (destination.departureDateFrom) {
-  //  params.set("outbound_date", destination.departureDateFrom);
- // }
+  if (destination.departureDateFrom) {
+    params.set("outbound_date", destination.departureDateFrom);
+  }
 
   if (destination.tripType === "round_trip" && destination.returnDateFrom) {
     params.set("return_date", destination.returnDateFrom);
