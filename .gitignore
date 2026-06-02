@@ -82,3 +82,4 @@ CURL_CFFI_MIGRATION.md
 SCRAPERAPI_MIGRATION.md
 docs/EXCHANGE_RATES.md
 .sandbox-home/
+prompts.md
