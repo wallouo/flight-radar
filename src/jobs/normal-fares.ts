@@ -47,7 +47,6 @@ function minAdvanceDateString(minAdvanceDays: number): string {
     return addDays(todayAsDateString(), minAdvanceDays);
 }
 
-// 從指定日期開始，產生連續 N 天的日期字串陣列
 function generateCandidateDates(startDateStr: string, numberOfDays: number): string[] {
     const dates: string[] = [];
     for (let i = 0; i < numberOfDays; i++) {
@@ -57,60 +56,86 @@ function generateCandidateDates(startDateStr: string, numberOfDays: number): str
 }
 
 /**
- * Resolves the effective departure window for a destination.
+ * Resolves the effective departure window for a destination, honouring any
+ * partial date configuration and rolling forward stale windows.
  *
- * Rules (in priority order):
- *  1. If the destination has no departureDateFrom/To configured, fall back to
- *     a rolling window starting at minValidDate.
- *  2. If the ENTIRE configured window is already before minValidDate (i.e. the
- *     DB dates are stale / were never updated), roll the window forward so it
- *     starts at minValidDate.  This prevents every route being silently skipped
- *     when the stored dates have passed.
- *  3. If only departureDateFrom is before minValidDate, clamp it up to
- *     minValidDate while keeping the original departureDateTo.
- *  4. Otherwise use the dates as-is.
+ * Partial-date cases (Codex review):
+ *  - Only `from` set, `to` absent  → use from (clamped to minValidDate) as
+ *    start; end = start + SCAN_WINDOW_DAYS - 1.
+ *  - Only `to` set, `from` absent  → honour the configured `to` as the
+ *    ceiling; start = minValidDate.
+ *  - Neither set                   → rolling window: minValidDate .. +2.
  *
- * Returns the resolved { from, to } strings, or null if the window is
- * somehow still invalid after resolution (should not normally occur).
+ * Full-date cases:
+ *  - Both set, entire window stale (to < minValidDate)
+ *                                  → roll forward: minValidDate .. +2.
+ *  - Both set, only `from` stale   → clamp `from` to minValidDate, keep `to`.
+ *  - Both set, fully valid         → use as-is.
  */
-function resolveEffectiveDepartureWindow(
+export function resolveEffectiveDepartureWindow(
     destination: TrackedDestination,
     minValidDate: string
 ): { from: string; to: string } {
     const { departureDateFrom, departureDateTo } = destination;
 
-    // Case 1: no dates configured at all — use a rolling window
-    if (!departureDateFrom || !departureDateTo) {
-        const from = minValidDate;
-        const to = addDays(minValidDate, SCAN_WINDOW_DAYS - 1);
-        return { from, to };
+    // ── Neither bound configured ─────────────────────────────────────────────
+    if (!departureDateFrom && !departureDateTo) {
+        return {
+            from: minValidDate,
+            to: addDays(minValidDate, SCAN_WINDOW_DAYS - 1)
+        };
     }
 
-    // Case 2: entire window is stale — roll forward to minValidDate
-    if (departureDateTo < minValidDate) {
+    // ── Only `from` configured ───────────────────────────────────────────────
+    if (departureDateFrom && !departureDateTo) {
+        const from = departureDateFrom < minValidDate ? minValidDate : departureDateFrom;
+        return { from, to: addDays(from, SCAN_WINDOW_DAYS - 1) };
+    }
+
+    // ── Only `to` configured ─────────────────────────────────────────────────
+    if (!departureDateFrom && departureDateTo) {
+        // If the ceiling has already passed, roll forward (don't skip).
+        if (departureDateTo < minValidDate) {
+            console.info(
+                `[normal-fares] departureDateTo=${departureDateTo} is stale for ` +
+                `${destination.originAirportCode}->${destination.destinationAirportCode}, rolling forward.`
+            );
+            return {
+                from: minValidDate,
+                to: addDays(minValidDate, SCAN_WINDOW_DAYS - 1)
+            };
+        }
+        return { from: minValidDate, to: departureDateTo };
+    }
+
+    // ── Both bounds configured ───────────────────────────────────────────────
+    // departureDateFrom and departureDateTo are both defined here.
+    const from = departureDateFrom!;
+    const to = departureDateTo!;
+
+    // Entire window stale → roll forward
+    if (to < minValidDate) {
         console.info(
-            `[normal-fares] search window for ${
-                destination.originAirportCode
-            }->${destination.destinationAirportCode} is stale ` +
-            `(departureDateTo=${departureDateTo} < minValidDate=${minValidDate}). ` +
-            `Rolling forward to a ${SCAN_WINDOW_DAYS}-day window from ${minValidDate}.`
+            `[normal-fares] search window stale (departureDateTo=${to} < minValidDate=${minValidDate}) ` +
+            `for ${destination.originAirportCode}->${destination.destinationAirportCode}. Rolling forward.`
         );
-        const from = minValidDate;
-        const to = addDays(minValidDate, SCAN_WINDOW_DAYS - 1);
-        return { from, to };
+        return {
+            from: minValidDate,
+            to: addDays(minValidDate, SCAN_WINDOW_DAYS - 1)
+        };
     }
 
-    // Case 3: only the start is stale — clamp departureDateFrom
-    const from = departureDateFrom < minValidDate ? minValidDate : departureDateFrom;
-    if (from !== departureDateFrom) {
+    // Only start is stale → clamp
+    const effectiveFrom = from < minValidDate ? minValidDate : from;
+    if (effectiveFrom !== from) {
         console.info(
-            `[normal-fares] adjusting departureDateFrom for ${
-                destination.originAirportCode
-            }->${destination.destinationAirportCode} from ${departureDateFrom} to ${from}`
+            `[normal-fares] clamping departureDateFrom for ` +
+            `${destination.originAirportCode}->${destination.destinationAirportCode} ` +
+            `from ${from} to ${effectiveFrom}`
         );
     }
 
-    return { from, to: departureDateTo };
+    return { from: effectiveFrom, to };
 }
 
 export async function runNormalFaresJob(deps: NormalFaresJobDeps): Promise<void> {
@@ -123,28 +148,18 @@ export async function runNormalFaresJob(deps: NormalFaresJobDeps): Promise<void>
 
         for (const originAirportCode of expandedOrigins) {
             const effectiveWindow = resolveEffectiveDepartureWindow(destination, minValidDate);
-
             const candidateDates = generateCandidateDates(effectiveWindow.from, SCAN_WINDOW_DAYS);
 
             console.info(
-                `[normal-fares] generated ${candidateDates.length} candidate date(s) for ${
-                    originAirportCode
-                }->${destination.destinationAirportCode}: ${candidateDates.join(", ")}`
+                `[normal-fares] scanning ${originAirportCode}->${destination.destinationAirportCode}: ` +
+                `window=${effectiveWindow.from}..${effectiveWindow.to} ` +
+                `dates=${candidateDates.join(", ")}`
             );
 
-            const tripLengthDays = DEFAULT_TRIP_LENGTH_DAYS;
-
             for (const departDate of candidateDates) {
-                // Skip dates that fall beyond the effective window end
-                if (departDate > effectiveWindow.to) {
-                    break;
-                }
+                if (departDate > effectiveWindow.to) break;
 
-                const returnDate = addDays(departDate, tripLengthDays);
-
-                console.info(
-                    `[normal-fares] scanning ${originAirportCode}->${destination.destinationAirportCode}: departDate=${departDate} returnDate=${returnDate}`
-                );
+                const returnDate = addDays(departDate, DEFAULT_TRIP_LENGTH_DAYS);
 
                 const searchDestination: TrackedDestination = {
                     ...destination,
@@ -174,12 +189,15 @@ export async function runNormalFaresJob(deps: NormalFaresJobDeps): Promise<void>
                         if (isUniqueConstraintError(error)) {
                             continue;
                         }
-
+                        // Surface unexpected errors (e.g. Zod validation, DB failures)
+                        // so they appear in logs and CI rather than disappearing silently.
                         console.error(
-                            `[normal-fares] failed to insert observation for ${originAirportCode}->${destination.destinationAirportCode}:`,
+                            `[normal-fares] unexpected error inserting observation for ` +
+                            `${originAirportCode}->${destination.destinationAirportCode} ` +
+                            `departDate=${departDate}:`,
                             error
                         );
-                        continue;
+                        throw error;
                     }
 
                     const alertFingerprint = buildFareAlertFingerprint(observation);
