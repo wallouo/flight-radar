@@ -26,6 +26,11 @@ interface SerpApiSearchResponse {
 
 const DEFAULT_SERPAPI_BASE_URL = "https://serpapi.com/search.json";
 
+/** Redacts the api_key param value for safe logging. */
+function redactApiKey(url: string): string {
+  return url.replace(/(api_key=)[^&]+/, "$1[REDACTED]");
+}
+
 export function parseSerpApiFlightResults(payload: unknown): SerpApiFlightResult[] {
   if (!Array.isArray(payload)) {
     throw new Error("Expected SerpApi flights array");
@@ -54,16 +59,30 @@ export function createSerpApiClient(config: SerpApiClientConfig): SerpApiClient 
   return {
     async searchFlights(destination: TrackedDestination): Promise<SerpApiFlightResult[]> {
       const requestUrl = buildSerpApiUrl(destination, config);
+      console.info(`[serpapi] GET ${redactApiKey(requestUrl)}`);
+
       const response = await fetchWithPoolRetry(requestUrl, config, fetchImpl);
+      console.info(`[serpapi] response status=${response.status} for ${destination.originAirportCode}->${destination.destinationAirportCode}`);
 
       if (!response.ok) {
         const errorText = await response.text().catch(() => "");
         throw new Error(
-          `SerpApi request failed with status ${response.status} url=${requestUrl} body=${errorText}`
+          `SerpApi request failed with status ${response.status} url=${redactApiKey(requestUrl)} body=${errorText}`
         );
       }
 
-      const payload = (await response.json()) as SerpApiSearchResponse;
+      const payload = (await response.json()) as SerpApiSearchResponse & Record<string, unknown>;
+
+      // DIAGNOSTIC: log top-level keys and error field if present
+      const topKeys = Object.keys(payload);
+      console.info(`[serpapi] response keys: [${topKeys.join(", ")}]`);
+      if (payload["error"]) {
+        console.warn(`[serpapi] error field present: ${JSON.stringify(payload["error"])}`);
+      }
+      const bestCount = Array.isArray(payload.best_flights) ? payload.best_flights.length : 0;
+      const otherCount = Array.isArray(payload.other_flights) ? payload.other_flights.length : 0;
+      console.info(`[serpapi] best_flights=${bestCount} other_flights=${otherCount}`);
+
       return parseSerpApiSearchResponse(payload);
     },
 
@@ -74,7 +93,7 @@ export function createSerpApiClient(config: SerpApiClientConfig): SerpApiClient 
       if (!response.ok) {
         const errorText = await response.text().catch(() => "");
         throw new Error(
-          `SerpApi calendar request failed with status ${response.status} url=${requestUrl} body=${errorText}`
+          `SerpApi calendar request failed with status ${response.status} url=${redactApiKey(requestUrl)} body=${errorText}`
         );
       }
 
@@ -191,15 +210,10 @@ export function buildSerpApiUrl(destination: TrackedDestination, config: SerpApi
         params.set("return_date", destination.returnDateFrom);
     }
 
-    // 唯一正確的 stops 映射，不會再被覆寫
     if (typeof destination.maxStops === "number") {
-        // 如果 DB 存 0 (直飛)，轉為 SerpApi 的 1
-        // 如果 DB 存 1 (轉機1次)，轉為 SerpApi 的 2
         const serpApiStops = destination.maxStops + 1;
         params.set("stops", String(serpApiStops));
     }
-
-    // ❌ 刪除 params.set("deep_search", "true");
 
     return url.toString();
 }
@@ -226,9 +240,6 @@ export function buildSerpApiCalendarUrl(
     if (destination.tripType === "round_trip" && destination.returnDateFrom) {
         params.set("return_date", destination.returnDateFrom);
     }
-
-    // 💡 日曆 API 建議不要帶 stops 或 travel_class 參數，讓它能抓到最多天數的價格基準
-    // ❌ 刪除 params.set("deep_search", "true");
 
     return url.toString();
 }
