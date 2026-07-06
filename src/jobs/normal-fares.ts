@@ -56,6 +56,63 @@ function generateCandidateDates(startDateStr: string, numberOfDays: number): str
     return dates;
 }
 
+/**
+ * Resolves the effective departure window for a destination.
+ *
+ * Rules (in priority order):
+ *  1. If the destination has no departureDateFrom/To configured, fall back to
+ *     a rolling window starting at minValidDate.
+ *  2. If the ENTIRE configured window is already before minValidDate (i.e. the
+ *     DB dates are stale / were never updated), roll the window forward so it
+ *     starts at minValidDate.  This prevents every route being silently skipped
+ *     when the stored dates have passed.
+ *  3. If only departureDateFrom is before minValidDate, clamp it up to
+ *     minValidDate while keeping the original departureDateTo.
+ *  4. Otherwise use the dates as-is.
+ *
+ * Returns the resolved { from, to } strings, or null if the window is
+ * somehow still invalid after resolution (should not normally occur).
+ */
+function resolveEffectiveDepartureWindow(
+    destination: TrackedDestination,
+    minValidDate: string
+): { from: string; to: string } {
+    const { departureDateFrom, departureDateTo } = destination;
+
+    // Case 1: no dates configured at all — use a rolling window
+    if (!departureDateFrom || !departureDateTo) {
+        const from = minValidDate;
+        const to = addDays(minValidDate, SCAN_WINDOW_DAYS - 1);
+        return { from, to };
+    }
+
+    // Case 2: entire window is stale — roll forward to minValidDate
+    if (departureDateTo < minValidDate) {
+        console.info(
+            `[normal-fares] search window for ${
+                destination.originAirportCode
+            }->${destination.destinationAirportCode} is stale ` +
+            `(departureDateTo=${departureDateTo} < minValidDate=${minValidDate}). ` +
+            `Rolling forward to a ${SCAN_WINDOW_DAYS}-day window from ${minValidDate}.`
+        );
+        const from = minValidDate;
+        const to = addDays(minValidDate, SCAN_WINDOW_DAYS - 1);
+        return { from, to };
+    }
+
+    // Case 3: only the start is stale — clamp departureDateFrom
+    const from = departureDateFrom < minValidDate ? minValidDate : departureDateFrom;
+    if (from !== departureDateFrom) {
+        console.info(
+            `[normal-fares] adjusting departureDateFrom for ${
+                destination.originAirportCode
+            }->${destination.destinationAirportCode} from ${departureDateFrom} to ${from}`
+        );
+    }
+
+    return { from, to: departureDateTo };
+}
+
 export async function runNormalFaresJob(deps: NormalFaresJobDeps): Promise<void> {
     const destinations = await deps.repository.listActiveTrackedDestinations();
     const minValidDate = minAdvanceDateString(MIN_ADVANCE_DAYS);
@@ -65,51 +122,28 @@ export async function runNormalFaresJob(deps: NormalFaresJobDeps): Promise<void>
         const historicalLowestFares = await deps.repository.listLowestHistoricalFares(destination.id, 3);
 
         for (const originAirportCode of expandedOrigins) {
-            if (!destination.departureDateFrom) {
-                console.info(
-                    `[normal-fares] skipping ${originAirportCode}->${destination.destinationAirportCode}: no departureDateFrom configured`
-                );
-                continue;
-            }
+            const effectiveWindow = resolveEffectiveDepartureWindow(destination, minValidDate);
 
-            if (!destination.departureDateTo) {
-                console.info(
-                    `[normal-fares] skipping ${originAirportCode}->${destination.destinationAirportCode}: no departureDateTo configured`
-                );
-                continue;
-            }
+            const candidateDates = generateCandidateDates(effectiveWindow.from, SCAN_WINDOW_DAYS);
 
-            if (destination.departureDateTo < minValidDate) {
-                console.info(
-                    `[normal-fares] skipping ${originAirportCode}->${destination.destinationAirportCode}: search window entirely before ${minValidDate}`
-                );
-                continue;
-            }
-
-            const adjustedDepartureFrom =
-                destination.departureDateFrom < minValidDate
-                    ? minValidDate
-                    : destination.departureDateFrom;
-
-            if (adjustedDepartureFrom !== destination.departureDateFrom) {
-                console.info(
-                    `[normal-fares] adjusting departureDateFrom for ${originAirportCode}->${destination.destinationAirportCode} from ${destination.departureDateFrom} to ${adjustedDepartureFrom}`
-                );
-            }
+            console.info(
+                `[normal-fares] generated ${candidateDates.length} candidate date(s) for ${
+                    originAirportCode
+                }->${destination.destinationAirportCode}: ${candidateDates.join(", ")}`
+            );
 
             const tripLengthDays = DEFAULT_TRIP_LENGTH_DAYS;
 
-            const candidateDates = generateCandidateDates(adjustedDepartureFrom, SCAN_WINDOW_DAYS);
-
-            console.info(
-                `[normal-fares] generated ${candidateDates.length} candidate date(s) locally for Phase 2: ${candidateDates.join(", ")}`
-            );
-
             for (const departDate of candidateDates) {
+                // Skip dates that fall beyond the effective window end
+                if (departDate > effectiveWindow.to) {
+                    break;
+                }
+
                 const returnDate = addDays(departDate, tripLengthDays);
 
                 console.info(
-                    `[normal-fares] phase 2 ${originAirportCode}->${destination.destinationAirportCode}: departDate=${departDate} returnDate=${returnDate}`
+                    `[normal-fares] scanning ${originAirportCode}->${destination.destinationAirportCode}: departDate=${departDate} returnDate=${returnDate}`
                 );
 
                 const searchDestination: TrackedDestination = {
