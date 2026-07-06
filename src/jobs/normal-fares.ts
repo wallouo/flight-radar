@@ -58,19 +58,6 @@ function generateCandidateDates(startDateStr: string, numberOfDays: number): str
 /**
  * Resolves the effective departure window for a destination, honouring any
  * partial date configuration and rolling forward stale windows.
- *
- * Partial-date cases (Codex review):
- *  - Only `from` set, `to` absent  → use from (clamped to minValidDate) as
- *    start; end = start + SCAN_WINDOW_DAYS - 1.
- *  - Only `to` set, `from` absent  → honour the configured `to` as the
- *    ceiling; start = minValidDate.
- *  - Neither set                   → rolling window: minValidDate .. +2.
- *
- * Full-date cases:
- *  - Both set, entire window stale (to < minValidDate)
- *                                  → roll forward: minValidDate .. +2.
- *  - Both set, only `from` stale   → clamp `from` to minValidDate, keep `to`.
- *  - Both set, fully valid         → use as-is.
  */
 export function resolveEffectiveDepartureWindow(
     destination: TrackedDestination,
@@ -78,54 +65,37 @@ export function resolveEffectiveDepartureWindow(
 ): { from: string; to: string } {
     const { departureDateFrom, departureDateTo } = destination;
 
-    // ── Neither bound configured ─────────────────────────────────────────────
     if (!departureDateFrom && !departureDateTo) {
-        return {
-            from: minValidDate,
-            to: addDays(minValidDate, SCAN_WINDOW_DAYS - 1)
-        };
+        return { from: minValidDate, to: addDays(minValidDate, SCAN_WINDOW_DAYS - 1) };
     }
 
-    // ── Only `from` configured ───────────────────────────────────────────────
     if (departureDateFrom && !departureDateTo) {
         const from = departureDateFrom < minValidDate ? minValidDate : departureDateFrom;
         return { from, to: addDays(from, SCAN_WINDOW_DAYS - 1) };
     }
 
-    // ── Only `to` configured ─────────────────────────────────────────────────
     if (!departureDateFrom && departureDateTo) {
-        // If the ceiling has already passed, roll forward (don't skip).
         if (departureDateTo < minValidDate) {
             console.info(
                 `[normal-fares] departureDateTo=${departureDateTo} is stale for ` +
                 `${destination.originAirportCode}->${destination.destinationAirportCode}, rolling forward.`
             );
-            return {
-                from: minValidDate,
-                to: addDays(minValidDate, SCAN_WINDOW_DAYS - 1)
-            };
+            return { from: minValidDate, to: addDays(minValidDate, SCAN_WINDOW_DAYS - 1) };
         }
         return { from: minValidDate, to: departureDateTo };
     }
 
-    // ── Both bounds configured ───────────────────────────────────────────────
-    // departureDateFrom and departureDateTo are both defined here.
     const from = departureDateFrom!;
     const to = departureDateTo!;
 
-    // Entire window stale → roll forward
     if (to < minValidDate) {
         console.info(
             `[normal-fares] search window stale (departureDateTo=${to} < minValidDate=${minValidDate}) ` +
             `for ${destination.originAirportCode}->${destination.destinationAirportCode}. Rolling forward.`
         );
-        return {
-            from: minValidDate,
-            to: addDays(minValidDate, SCAN_WINDOW_DAYS - 1)
-        };
+        return { from: minValidDate, to: addDays(minValidDate, SCAN_WINDOW_DAYS - 1) };
     }
 
-    // Only start is stale → clamp
     const effectiveFrom = from < minValidDate ? minValidDate : from;
     if (effectiveFrom !== from) {
         console.info(
@@ -141,6 +111,8 @@ export function resolveEffectiveDepartureWindow(
 export async function runNormalFaresJob(deps: NormalFaresJobDeps): Promise<void> {
     const destinations = await deps.repository.listActiveTrackedDestinations();
     const minValidDate = minAdvanceDateString(MIN_ADVANCE_DAYS);
+
+    console.info(`[normal-fares] minValidDate=${minValidDate}, destinations=${destinations.length}`);
 
     for (const destination of destinations) {
         const expandedOrigins = buildExpandedOrigins(destination);
@@ -169,10 +141,47 @@ export async function runNormalFaresJob(deps: NormalFaresJobDeps): Promise<void>
                     returnDateFrom: returnDate
                 };
 
-                const results = await deps.serpApiClient.searchFlights(searchDestination);
+                let results: SerpApiFlightResult[];
+                try {
+                    results = await deps.serpApiClient.searchFlights(searchDestination);
+                } catch (error) {
+                    console.error(
+                        `[normal-fares] searchFlights failed for ${originAirportCode}->${destination.destinationAirportCode} ` +
+                        `departDate=${departDate}:`,
+                        error
+                    );
+                    throw error;
+                }
+
+                // DIAGNOSTIC: log raw results count + first result's departure airport
+                const firstOrigin = results[0]?.flights?.[0]?.departure_airport?.id ?? "(none)";
+                console.info(
+                    `[normal-fares] serpapi returned ${results.length} result(s) for ` +
+                    `${originAirportCode}->${destination.destinationAirportCode} departDate=${departDate} ` +
+                    `(first origin=${firstOrigin})`
+                );
+
                 const filteredResults = results.filter((result) =>
                     matchesTargetOriginAirport(result, destination.originAirportCode)
                 );
+
+                // DIAGNOSTIC: log how many passed the origin filter
+                if (results.length > 0 && filteredResults.length === 0) {
+                    const allOrigins = results
+                        .map((r) => r.flights?.[0]?.departure_airport?.id ?? "(unknown)")
+                        .join(", ");
+                    console.warn(
+                        `[normal-fares] ALL ${results.length} result(s) filtered out for ` +
+                        `${originAirportCode}->${destination.destinationAirportCode} departDate=${departDate}. ` +
+                        `Expected origin matching '${destination.originAirportCode}', ` +
+                        `got: [${allOrigins}]`
+                    );
+                } else {
+                    console.info(
+                        `[normal-fares] ${filteredResults.length}/${results.length} result(s) passed origin filter ` +
+                        `for ${originAirportCode}->${destination.destinationAirportCode} departDate=${departDate}`
+                    );
+                }
 
                 for (const result of filteredResults) {
                     const observation = deps.normalizeObservation({
@@ -185,12 +194,19 @@ export async function runNormalFaresJob(deps: NormalFaresJobDeps): Promise<void>
                     let observationRecord;
                     try {
                         observationRecord = await deps.repository.insertFareObservation(observation);
+                        console.info(
+                            `[normal-fares] inserted observation ${observationRecord.id} ` +
+                            `for ${originAirportCode}->${destination.destinationAirportCode} ` +
+                            `departDate=${departDate} price=${observation.priceAmountMinor}`
+                        );
                     } catch (error) {
                         if (isUniqueConstraintError(error)) {
+                            console.info(
+                                `[normal-fares] duplicate observation skipped for ` +
+                                `${originAirportCode}->${destination.destinationAirportCode} departDate=${departDate}`
+                            );
                             continue;
                         }
-                        // Surface unexpected errors (e.g. Zod validation, DB failures)
-                        // so they appear in logs and CI rather than disappearing silently.
                         console.error(
                             `[normal-fares] unexpected error inserting observation for ` +
                             `${originAirportCode}->${destination.destinationAirportCode} ` +
@@ -204,6 +220,12 @@ export async function runNormalFaresJob(deps: NormalFaresJobDeps): Promise<void>
                     const alreadyAlerted = await deps.repository.hasSentFareAlert(alertFingerprint);
 
                     if (!qualifiesForTopThreeAlert(historicalLowestFares, observation) || alreadyAlerted) {
+                        console.info(
+                            `[normal-fares] observation does not qualify for alert ` +
+                            `(qualifies=${qualifiesForTopThreeAlert(historicalLowestFares, observation)}, ` +
+                            `alreadyAlerted=${alreadyAlerted}) ` +
+                            `for ${originAirportCode}->${destination.destinationAirportCode} departDate=${departDate}`
+                        );
                         continue;
                     }
 
@@ -216,6 +238,11 @@ export async function runNormalFaresJob(deps: NormalFaresJobDeps): Promise<void>
                             historicalLowestPriceAmountMinor: sortedHistoricalPrices[0],
                             thirdLowestPriceAmountMinor: sortedHistoricalPrices[2]
                         })
+                    );
+
+                    console.info(
+                        `[normal-fares] sent Discord alert messageId=${messageId} ` +
+                        `for ${originAirportCode}->${destination.destinationAirportCode} departDate=${departDate}`
                     );
 
                     await deps.repository.recordFareAlert({
