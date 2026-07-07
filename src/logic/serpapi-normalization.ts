@@ -10,6 +10,23 @@ export interface BuildSerpApiObservationArgs {
   observedAt?: string;
 }
 
+/**
+ * Returns the URL string if it is a valid absolute URL, otherwise undefined.
+ * Prevents Zod z.string().url() from throwing during insertFareObservation
+ * when SerpAPI returns an empty string or a relative path as deep_link.
+ */
+function sanitiseDeepLink(raw: string | undefined): string | undefined {
+  if (!raw || raw.trim() === "") return undefined;
+  try {
+    const parsed = new URL(raw);
+    // Only accept http / https URLs
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return undefined;
+    return raw;
+  } catch {
+    return undefined;
+  }
+}
+
 export function buildSerpApiObservation(args: BuildSerpApiObservationArgs): NormalizedFareObservation {
   const observedAt = args.observedAt ?? new Date().toISOString();
   const departDate = args.result.departure_date ?? args.destination.departureDateFrom;
@@ -31,7 +48,7 @@ export function buildSerpApiObservation(args: BuildSerpApiObservationArgs): Norm
     tripType: args.destination.tripType,
     priceAmountMinor: decimalToMinorUnits(args.result.price),
     currencyCode,
-    deepLink: args.result.deep_link,
+    deepLink: sanitiseDeepLink(args.result.deep_link),
     flightFingerprint: buildSerpApiFlightFingerprint(args.destination, args.result),
     rawPayloadJson: JSON.stringify(args.result)
   };
