@@ -26,9 +26,33 @@ interface SerpApiSearchResponse {
 
 const DEFAULT_SERPAPI_BASE_URL = "https://serpapi.com/search.json";
 
+/**
+ * Metro-code → comma-separated IATA airport list for SerpAPI departure_id.
+ * Google Flights does not reliably resolve metro codes (e.g. LON) on its own;
+ * expanding to individual airports ensures results are returned.
+ */
+const METRO_CODE_EXPANSIONS: Readonly<Record<string, string>> = {
+  LON: "LHR,LGW,STN,LTN,LCY",
+  NYC: "JFK,LGA,EWR",
+  PAR: "CDG,ORY",
+  TYO: "NRT,HND",
+  OSA: "KIX,ITM",
+  MIL: "MXP,LIN",
+  BUH: "OTP,BBU",
+};
+
 /** Redacts the api_key param value for safe logging. */
 function redactApiKey(url: string): string {
   return url.replace(/(api_key=)[^&]+/, "$1[REDACTED]");
+}
+
+/**
+ * Resolves a potentially metro airport code to the SerpAPI departure_id value.
+ * Returns comma-separated individual airports if the code is a known metro code,
+ * otherwise returns the code unchanged.
+ */
+function resolveSerpapiDepartureId(airportCode: string): string {
+  return METRO_CODE_EXPANSIONS[airportCode.toUpperCase()] ?? airportCode;
 }
 
 export function parseSerpApiFlightResults(payload: unknown): SerpApiFlightResult[] {
@@ -73,7 +97,6 @@ export function createSerpApiClient(config: SerpApiClientConfig): SerpApiClient 
 
       const payload = (await response.json()) as SerpApiSearchResponse & Record<string, unknown>;
 
-      // DIAGNOSTIC: log top-level keys and error field if present
       const topKeys = Object.keys(payload);
       console.info(`[serpapi] response keys: [${topKeys.join(", ")}]`);
       if (payload["error"]) {
@@ -103,12 +126,6 @@ export function createSerpApiClient(config: SerpApiClientConfig): SerpApiClient 
   };
 }
 
-/**
- * Executes a fetch, replacing the api_key param with the active pool key.
- * On HTTP 403 (quota exhausted) or 429 (rate limit), marks the current key 
- * as exhausted and retries once with the next available key. 
- * Throws if all keys are exhausted.
- */
 async function fetchWithPoolRetry(
   requestUrl: string,
   config: SerpApiClientConfig,
@@ -123,10 +140,9 @@ async function fetchWithPoolRetry(
     headers: { Accept: "application/json" }
   });
 
-  // SerpAPI returns 403 when quota is exhausted, 429 for rate limiting
   if ((response.status === 403 || response.status === 429) && config.keyPool) {
     config.keyPool.markExhausted(activeKey);
-    const nextKey = config.keyPool.getActiveKey(); // throws if all exhausted
+    const nextKey = config.keyPool.getActiveKey();
     return fetchImpl(swapKey(requestUrl, nextKey), {
       method: "GET",
       headers: { Accept: "application/json" }
@@ -153,13 +169,11 @@ export function parseSerpApiCalendarResponse(payload: unknown): SerpApiCalendarD
 
   const response = payload as Record<string, unknown>;
 
-  // Debug: log response keys and error if present
   console.log("[serpapi] calendar response keys:", Object.keys(response));
   if (response["error"]) {
     console.log("[serpapi] calendar error:", JSON.stringify(response["error"]));
   }
 
-  // SerpAPI Google Flights calendar may return data under different keys
   const candidateArrays = [
     response["flights_results"],
     response["price_insights"],
@@ -188,60 +202,62 @@ export function parseSerpApiCalendarResponse(payload: unknown): SerpApiCalendarD
 }
 
 export function buildSerpApiUrl(destination: TrackedDestination, config: SerpApiClientConfig): string {
-    const baseUrl = config.baseUrl ?? DEFAULT_SERPAPI_BASE_URL;
-    const url = new URL(baseUrl);
-    const params = url.searchParams;
+  const baseUrl = config.baseUrl ?? DEFAULT_SERPAPI_BASE_URL;
+  const url = new URL(baseUrl);
+  const params = url.searchParams;
 
-    params.set("engine", "google_flights");
-    params.set("api_key", config.apiKey); 
-    params.set("departure_id", destination.originAirportCode);
-    params.set("arrival_id", destination.destinationAirportCode);
-    params.set("gl", extractGoogleMarket(destination.locale));
-    params.set("hl", extractGoogleLanguage(destination.locale));
-    params.set("currency", destination.currencyCode);
-    params.set("type", destination.tripType === "one_way" ? "2" : "1");
-    params.set("travel_class", mapCabinClass(destination.cabinClass));
+  params.set("engine", "google_flights");
+  params.set("api_key", config.apiKey);
+  params.set("departure_id", resolveSerpapiDepartureId(destination.originAirportCode));
+  params.set("arrival_id", destination.destinationAirportCode);
+  params.set("gl", extractGoogleMarket(destination.locale));
+  params.set("hl", extractGoogleLanguage(destination.locale));
+  params.set("currency", destination.currencyCode);
+  params.set("type", destination.tripType === "one_way" ? "2" : "1");
+  params.set("travel_class", mapCabinClass(destination.cabinClass));
+  params.set("deep_search", "true");
 
-    if (destination.departureDateFrom) {
-        params.set("outbound_date", destination.departureDateFrom);
-    }
+  if (destination.departureDateFrom) {
+    params.set("outbound_date", destination.departureDateFrom);
+  }
 
-    if (destination.tripType === "round_trip" && destination.returnDateFrom) {
-        params.set("return_date", destination.returnDateFrom);
-    }
+  if (destination.tripType === "round_trip" && destination.returnDateFrom) {
+    params.set("return_date", destination.returnDateFrom);
+  }
 
-    if (typeof destination.maxStops === "number") {
-        const serpApiStops = destination.maxStops + 1;
-        params.set("stops", String(serpApiStops));
-    }
+  if (typeof destination.maxStops === "number") {
+    // DB: 0 = nonstop → SerpAPI: 1; DB: 1 = ≤1 stop → SerpAPI: 2; etc.
+    params.set("stops", String(destination.maxStops + 1));
+  }
 
-    return url.toString();
+  return url.toString();
 }
 
 export function buildSerpApiCalendarUrl(
-    destination: TrackedDestination,
-    dateYYYYMMDD: string,
-    config: SerpApiClientConfig
+  destination: TrackedDestination,
+  dateYYYYMMDD: string,
+  config: SerpApiClientConfig
 ): string {
-    const baseUrl = config.baseUrl ?? DEFAULT_SERPAPI_BASE_URL;
-    const url = new URL(baseUrl);
-    const params = url.searchParams;
+  const baseUrl = config.baseUrl ?? DEFAULT_SERPAPI_BASE_URL;
+  const url = new URL(baseUrl);
+  const params = url.searchParams;
 
-    params.set("engine", "google_flights");
-    params.set("api_key", config.apiKey); 
-    params.set("departure_id", destination.originAirportCode);
-    params.set("arrival_id", destination.destinationAirportCode);
-    params.set("gl", extractGoogleMarket(destination.locale));
-    params.set("hl", extractGoogleLanguage(destination.locale));
-    params.set("currency", destination.currencyCode);
-    params.set("type", destination.tripType === "one_way" ? "2" : "1");
-    params.set("outbound_date", dateYYYYMMDD);
-    
-    if (destination.tripType === "round_trip" && destination.returnDateFrom) {
-        params.set("return_date", destination.returnDateFrom);
-    }
+  params.set("engine", "google_flights");
+  params.set("api_key", config.apiKey);
+  params.set("departure_id", resolveSerpapiDepartureId(destination.originAirportCode));
+  params.set("arrival_id", destination.destinationAirportCode);
+  params.set("gl", extractGoogleMarket(destination.locale));
+  params.set("hl", extractGoogleLanguage(destination.locale));
+  params.set("currency", destination.currencyCode);
+  params.set("type", destination.tripType === "one_way" ? "2" : "1");
+  params.set("outbound_date", dateYYYYMMDD);
+  params.set("deep_search", "true");
 
-    return url.toString();
+  if (destination.tripType === "round_trip" && destination.returnDateFrom) {
+    params.set("return_date", destination.returnDateFrom);
+  }
+
+  return url.toString();
 }
 
 function normalizeSerpApiFlightResult(payload: unknown): unknown {
