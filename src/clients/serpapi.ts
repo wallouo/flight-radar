@@ -26,6 +26,12 @@ interface SerpApiSearchResponse {
 
 const DEFAULT_SERPAPI_BASE_URL = "https://serpapi.com/search.json";
 
+/** Maximum number of retry attempts for transient 5xx errors (502, 503). */
+const MAX_TRANSIENT_RETRIES = 3;
+
+/** Base delay in ms for exponential backoff on transient errors. */
+const RETRY_BASE_DELAY_MS = 5_000;
+
 /**
  * Metro-code → comma-separated IATA airport list for SerpAPI departure_id.
  * Google Flights does not reliably resolve metro codes (e.g. LON) on its own;
@@ -126,6 +132,24 @@ export function createSerpApiClient(config: SerpApiClientConfig): SerpApiClient 
   };
 }
 
+/**
+ * Sleeps for the given number of milliseconds.
+ */
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * Fetches a URL with the following retry strategy:
+ *
+ * 1. Transient errors (502, 503): retried up to MAX_TRANSIENT_RETRIES times
+ *    with exponential backoff (5s, 10s, 20s). The same key is reused because
+ *    these errors indicate server-side overload, not an auth problem.
+ *
+ * 2. Auth/rate-limit errors (403, 429): if a key pool is configured the
+ *    exhausted key is marked and the request is immediately retried once with
+ *    the next available key. No further retries are attempted.
+ */
 async function fetchWithPoolRetry(
   requestUrl: string,
   config: SerpApiClientConfig,
@@ -134,22 +158,48 @@ async function fetchWithPoolRetry(
   const swapKey = (url: string, key: string): string =>
     url.replace(/(api_key=)[^&]*/, `$1${encodeURIComponent(key)}`);
 
-  const activeKey = config.keyPool ? config.keyPool.getActiveKey() : config.apiKey;
-  const response = await fetchImpl(swapKey(requestUrl, activeKey), {
-    method: "GET",
-    headers: { Accept: "application/json" }
-  });
+  let lastResponse: Response | undefined;
 
-  if ((response.status === 403 || response.status === 429) && config.keyPool) {
-    config.keyPool.markExhausted(activeKey);
-    const nextKey = config.keyPool.getActiveKey();
-    return fetchImpl(swapKey(requestUrl, nextKey), {
+  for (let attempt = 0; attempt < MAX_TRANSIENT_RETRIES; attempt++) {
+    const activeKey = config.keyPool ? config.keyPool.getActiveKey() : config.apiKey;
+    const response = await fetchImpl(swapKey(requestUrl, activeKey), {
       method: "GET",
-      headers: { Accept: "application/json" }
+      headers: { Accept: "application/json" },
     });
+
+    // Handle auth / rate-limit errors: swap key and retry once immediately.
+    if ((response.status === 403 || response.status === 429) && config.keyPool) {
+      config.keyPool.markExhausted(activeKey);
+      const nextKey = config.keyPool.getActiveKey();
+      return fetchImpl(swapKey(requestUrl, nextKey), {
+        method: "GET",
+        headers: { Accept: "application/json" },
+      });
+    }
+
+    // Handle transient server errors: wait with exponential backoff then retry.
+    if (response.status === 502 || response.status === 503) {
+      lastResponse = response;
+      const delay = RETRY_BASE_DELAY_MS * Math.pow(2, attempt); // 5s, 10s, 20s
+      console.warn(
+        `[serpapi] transient ${response.status} on attempt ${attempt + 1}/${MAX_TRANSIENT_RETRIES}, ` +
+        `retrying in ${delay / 1000}s…`
+      );
+      await sleep(delay);
+      continue;
+    }
+
+    // Any other status (success or non-retryable error) — return immediately.
+    return response;
   }
 
-  return response;
+  // All retry attempts exhausted — return the last response so the caller can
+  // inspect the status and body and throw a descriptive error.
+  console.error(
+    `[serpapi] giving up after ${MAX_TRANSIENT_RETRIES} transient retries ` +
+    `(last status=${lastResponse?.status})`
+  );
+  return lastResponse!;
 }
 
 export function parseSerpApiSearchResponse(payload: unknown): SerpApiFlightResult[] {
